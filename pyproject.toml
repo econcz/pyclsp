@@ -1,6 +1,6 @@
 [project]
 name = "pyclsp"
-version = "1.1.2"
+version = "1.1.8"
 description = "Modular Two-Step Convex Optimization Estimator for Ill-Posed Problems"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -35,7 +35,7 @@ dependencies = [
 ]
 
 [project.urls]
-omepage = "https://github.com/econcz/pyclsp"
+Homepage = "https://github.com/econcz/pyclsp"
 "Bug Tracker" = "https://github.com/econcz/pyclsp/issues"
 
 [build-system]

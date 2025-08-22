@@ -94,12 +94,17 @@ def CLSPCanonicalForm(
         C = np.vstack([row_groups, col_groups])
         # append an optional identity matrix to M, remove duplicates
         if zero_diagonal:
-            M_diag = np.hstack([np.diagflat(np.eye(1, m, k))
-                                for k in range(p)])
-            M = (M_diag.copy() if M is None or M.size == 0 else
-                 np.unique(np.vstack([M, M_diag]),  axis=0))
-            b = np.vstack([b, np.zeros((m, 1))])
-            del M_diag
+            M_diag = np.zeros((min(m, p), m * p))
+            for k in range(min(m, p)):
+                M_diag[k, k * p + k] = 1
+            M, idx = np.unique(M_diag.copy() if M is None or M.size == 0
+                                             else np.vstack([M, M_diag]),
+                               axis=0,       return_index=True)
+            self.b = np.vstack([self.b[0:C.shape[0]],
+                                np.zeros((min(m, p), 1)) if M is None
+                                else np.vstack([self.b[C.shape[0]:],
+                                np.zeros((min(m, p), 1))])[idx.reshape(-1)]])
+            del M_diag, idx
 
     # (A) Option 2. CMLS and RP problems
     if 'cmls' in problem.lower() or 'rp' in problem.lower():
@@ -321,4 +326,3 @@ def CLSPTTest(
         "mean_null"  : mean_null,
         "std_null"   : std_null
     }
-    # an extra line to even the total number

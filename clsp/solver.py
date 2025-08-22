@@ -12,7 +12,7 @@ def CLSPSolve(
           zero_diagonal:   bool  = False,
           r:     int             = 1,    Z: np.ndarray |  None  = None,
           tolerance:       float = np.sqrt(np.finfo(float).eps),
-          iteration_limit: int                         |  None  = None,
+          iteration_limit: int   = 50,
           final: bool   |  None  = None, alpha: float  |  None  = None,
           *args, **kwargs
 ) -> "CLSP":
@@ -242,8 +242,8 @@ def CLSPSolve(
 
     # (kappaC), (kappaB), (kappaA) Condition numbers
     self.kappaC            = np.linalg.cond(        self.A[:self.C_idx[0], :])
-    self.kappaB            = np.linalg.cond(la.pinv(self.A[:self.C_idx[0], :]) @
-                                            self.A)
+    self.kappaB            = np.linalg.cond(self.A @
+                                            la.pinv(self.A[:self.C_idx[0], :]))
     self.kappaA            = np.linalg.cond(        self.A)
 
     # (r2_partial), (nrmse_partial) M-block-based statistics

@@ -1,6 +1,6 @@
 # CLSP — Convex Least Squares Programming
 
-The **Convex Least Squares Programming (CLSP)** estimator is a two-step method for solving underdetermined, ill-posed, or structurally constrained least-squares problems. It combines pseudoinverse-based estimation with convex-programming correction (e.g., Lasso, Ridge, Elastic Net) to ensure numerical stability, structural coherence, and enhanced interpretability.
+**Linear Programming via Pseudoinverse Estimation (LPPINV)** is a two-stage estimation method that reformulates linear programs as structured least-squares problems. Drawing inspiration from the **Convex Least Squares Programming (CLSP)** framework, LPPINV solves linear inequality, equality, and bound constraints by (1) constructing a canonical constraint system and computing a pseudoinverse projection, followed by (2) a convex-programming correction stage to refine the solution under additional regularization (e.g., Lasso, Ridge, or Elastic Net).
 
 ## Installation
 
