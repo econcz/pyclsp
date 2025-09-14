@@ -1,6 +1,6 @@
 # CLSP — Convex Least Squares Programming
 
-**Linear Programming via Pseudoinverse Estimation (LPPINV)** is a two-stage estimation method that reformulates linear programs as structured least-squares problems. Drawing inspiration from the **Convex Least Squares Programming (CLSP)** framework, LPPINV solves linear inequality, equality, and bound constraints by (1) constructing a canonical constraint system and computing a pseudoinverse projection, followed by (2) a convex-programming correction stage to refine the solution under additional regularization (e.g., Lasso, Ridge, or Elastic Net).
+**Linear Programming via Pseudoinverse Estimation (LPPINV)** is a two-stage estimation method that reformulates linear programs as structured least-squares problems. Drawing inspiration from the **Convex Least Squares Programming (CLSP)** framework, LPPINV solves linear inequality, equality, and bound constraints by (1) constructing a canonical constraint system and computing a pseudoinverse projection, followed by (2) a convex-programming correction stage to refine the solution under additional regularization (e.g., Lasso, Ridge, or Elastic Net). All calculations are performed in numpy.float64 precision.
 
 ## Installation
 
@@ -11,37 +11,71 @@ pip install pyclsp
 ## Quick Example
 
 ```python
-import numpy as np
-import matplotlib.pyplot as plt
-from clsp import CLSP
+import   numpy as     np
+from     clsp  import CLSP
 
-# Example allocation problem: row sums (first 5) + col sums (last 5)
-b = np.array([22, 23, 26, 27, 21, 28, 24, 22, 24, 21], dtype=float)
+# CMLS (RP), based on known stationary points for y = D @ x + e, x to be estimated
 
-# Initialize estimator
-model = CLSP()
+seed     = 123456789
+rng      = np.random.default_rng(seed)
 
-# Solve the system (allocation problem)
-result = model.solve(problem='ap', b=b, m=5, p=5, final=True)
-print("Estimated matrix:")
-print(result.x)
+# sample (dataset)
+k        = 500                                               # number of observations in D
+p        = 6                                                 # number of regressors
+c        = 1                                                 # sum of coefficients
+D        = np.empty((k, p))
+D[:, 0 ] = 1.0                                               # constant
+D[:, 1:] = rng.normal(size=(k, p - 1))                       # D.,j ~ N(0,1), 2 <= j <= p
+b_true   = rng.normal(size=p)                                # b_true ~ N(0,1)
+b_true   = (b_true / b_true.sum()) * c
+e        = rng.normal(size=(k, 1))                           # e ~ N(0,1)
+y        = (D @ b_true).reshape(-1, 1) + e                   # y_t = D @ b_true + e_t
 
-# Access diagnostics
-print("NRMSE:", model.nrmse)
+# model
+b        = np.vstack([
+               np.asarray([c]),                              # c (the sum of coefficients)
+               np.zeros((k - 2, 1)),                         # zeros
+               np.zeros((k - 1, 1)),                         # zeros
+               y                                             # values of y_t
+           ])
+C        = np.vstack([
+               np.ones((1, p)),                              # a row of ones
+               np.diff(D, n=2, axis=0),                      # the 2nd differences
+               np.diff(D, n=1, axis=0)                       # the 1st differences
+           ])
+S        = np.block([
+               [np.zeros((  1, k-2))],                       # a zero vector
+               [np.diag(np.sign(np.diff(y.ravel(), n=2)))],  # a diagonal sign matrix
+               [np.zeros((k-1, k-2))],                       # a zero matrix
+           ])
+model    = CLSP().solve(
+               problem="cmls", b=b, C=C, S=S, M=D, 
+               r=1,                                          # a solution without refinement
+               alpha=1.0                                     # a unique MNBLUE estimator
+           )
 
-# Correlogram: RMSA sensitivity by constraint
-corr = model.corr()
-plt.figure(figsize=(8, 4))
-plt.grid(True, linestyle="--", alpha=0.6)
-plt.bar(range(len(corr["rmsa_i"])), corr["rmsa_i"])
-plt.xlabel("Constraint index")
-plt.ylabel("RMSA (row deletion effect)")
-plt.title("CLSP Correlogram")
-plt.tight_layout()
-plt.show()
+# results
+print("true beta (x_M):")
+print(np.round(np.asarray(b_true).flatten(), 4))
 
-# Hypothesis test
-print("t-test on NRMSE:", model.ttest())
+print("beta hat (x_M hat):")
+print(np.round(model.x.flatten(), 4))
+
+print("\nNumerical stability:")
+print("  kappaC :", round(model.kappaC, 4))
+print("  kappaB :", round(model.kappaB, 4))
+print("  kappaA :", round(model.kappaA, 4))
+
+print("\nGoodness-of-fit:")
+print("  R2_partial           :", round(model.r2_partial,    6))
+print("  NRMSE_partial        :", round(model.nrmse_partial, 6))
+print("  Diagnostic band (min):", np.round(np.min(model.x_lower), 4))
+print("  Diagnostic band (max):", np.round(np.max(model.x_upper), 4))
+print("  Monte Carlo t-test:")
+for kw, val in model.ttest(sample_size=30,                   # NRMSE_partial sample
+                           seed=seed, distribution="normal", # seed and distribution
+                           partial=True).items():
+    print(f"    {kw}: {float(val):.6f}")
 ```
 
 ## User Reference
@@ -134,7 +168,7 @@ This method performs a two-step estimation:
 **Parameters:**  
 `problem` : *str*, optional  
     Structural template for matrix construction. One of:  
-    - *'ap'* or *'tm'* : allocation (transaction) matrix problem (AP).  
+    - *'ap'* or *'tm'* : allocation (tabular) matrix problem (AP).  
     - *'cmls'* or *'rp'* : constrained-model least squares (regression) problem.  
     - anything else: general CLSP problem (user-defined `C` and/or `M`).
 
@@ -168,11 +202,14 @@ This method performs a two-step estimation:
 `final` : *bool*, default = *True*  
     If *True*, a convex programming problem is solved to refine `zhat`. The resulting solution `z` minimizes a weighted L1/L2 norm around `zhat` subject to `Az` = `b`.
 
-`alpha` : *float*, default = *1.0*  
+`alpha` : *float*, *list[float]* or *None*, default = *None*  
     Regularization parameter (weight) in the final convex program:  
-	- `α = 0`: Lasso (L1 norm)  
-	- `α = 1`: Tikhonov Regularization/Ridge (L2 norm)  
-	- `0 < α < 1`: Elastic Net
+    - `α = 0`: Lasso (L1 norm)  
+    - `α = 1`: Tikhonov Regularization/Ridge (L2 norm)  
+    - `0 < α < 1`: Elastic Net
+    If a scalar float is provided, that value is used after clipping to [0, 1].
+    If a list/iterable of floats is provided, each candidate is evaluated via a full solve, and the α with the smallest NRMSE is selected.
+    If None, α is chosen, based on an error rule: α = min(1.0, NRMSE_{α = 0} / (NRMSE_{α = 0} + NRMSE_{α = 1} + tolerance))   
 
 `*args`, `**kwargs` : optional  
     CVXPY arguments passed to the CVXPY solver.
@@ -191,9 +228,9 @@ Computes the structural correlogram of the CLSP constraint part.
 This method performs a row-deletion sensitivity analysis on the canonical constraint matrix `[C` | `S`], denoted as *C_canon*, and evaluates the marginal effect of each constraint row on numerical stability, angular alignment, and estimator sensitivity.
 
 For each row `i` in `C_canon`, it computes:  
-	- The Root Mean Square Alignment (`RMSA_i`) with all other rows `j` ≠ `i`.  
-	- The change in condition numbers κ(`C`), κ(`B`), and κ(`A`) when row `i` is deleted.  
-	- The effect on estimation quality: changes in `nrmse`, `zhat`, `z`, and `x` when row `i` is deleted.
+    - The Root Mean Square Alignment (`RMSA_i`) with all other rows `j` ≠ `i`.  
+    - The change in condition numbers κ(`C`), κ(`B`), and κ(`A`) when row `i` is deleted.  
+    - The effect on estimation quality: changes in `nrmse`, `zhat`, `z`, and `x` when row `i` is deleted.
 
 Additionally, it computes the total `rmsa` statistic across all rows, summarizing the overall angular alignment of *C_canon*.
 
@@ -242,6 +279,9 @@ tests whether the observed NRMSE significantly deviates from the null distributi
 
 `distribution` : *str* or *None*, default = *’normal’*  
     Distribution for generating simulated `b` vectors. One of (standard): *'normal'*, *'uniform'*, or *'laplace'*.
+    
+`partial` : *bool*, default = *False*  
+    If True, runs the t-test on the partial NRMSE: during simulation, the C-block entries are preserved and the M-block entries are simulated.
 
 **Returns:**  
 *dict*  
