@@ -20,14 +20,14 @@ def CLSPCanonicalForm(
     before solving a Convex Least Squares Programming (CLSP) problem.
 
     Depending on the specified problem type, it can generate allocation,
-    transaction, or modular constraints and enforce optional diagonal
+    tabular matrix, or modular constraints and enforce optional diagonal
     exclusions. All missing blocks are padded to ensure conformability.
 
     Parameters
     ----------
     problem : str, optional
         Structural template for matrix construction. One of:
-        - 'ap'   or 'tm' : allocation or transaction matrix problem.
+        - 'ap'   or 'tm' : allocation or tabular matrix problem.
         - 'cmls' or 'rp' : constrained modular least squares or RP-type.
         - ''     or other: General CLSP problems (user-defined C and/or M).
 
@@ -76,8 +76,16 @@ def CLSPCanonicalForm(
     # (b) Ensure the right-hand side is defined and set `self.b`
     if b is None:
         raise self.error("Right-hand side vector b must be provided.")
-    self.b = b
+    self.b = b.astype(np.float64).reshape(-1, 1)
 
+    if  C is not None:
+        C = C.astype(np.float64)
+    if  S is not None:
+        S = S.astype(np.float64)
+    if  M is not None:
+        M = M.astype(np.float64)
+    if  Q is not None:
+        Q = Q.astype(np.float64)
     # (A) Option 1. AP (TM) problems with an optional zero diagonal
     if 'ap' in problem.lower() or 'tm' in problem.lower():
         if m is None or p is None:
@@ -110,9 +118,6 @@ def CLSPCanonicalForm(
     if 'cmls' in problem.lower() or 'rp' in problem.lower():
         if C is None or M is None:
             raise self.error("Both C and M must be provided.")
-        if C.shape[0] % M.shape[0] != 0:
-            raise self.error(f"Row mismatch: rows(C) = {C.shape[0]} must be "
-                             f"divisible by rows(M) = {M.shape[0]}")
 
     # (A) Option 3. General problems
     if C is None and M is None:
@@ -183,7 +188,7 @@ def CLSPCorrelogram(
         }
     """
     # (RMSA) Total RMSA
-    if self.rmsa        == None          or reset:
+    if self.rmsa        is None          or reset:
         k                        = self.C_idx[0]
         p                        = self.C_idx[1]
         C_canon                  = self.A[:k]
@@ -246,7 +251,8 @@ def CLSPCorrelogram(
 
 def CLSPTTest(
     self, reset:       bool = False,       sample_size:  int   = 50,
-          seed:        int  | None = None, distribution: str   | None = None
+          seed:        int  | None = None, distribution: str   | None = None,
+          partial:     bool = False
 ) -> dict[str, float]:
     """
     Perform Monte Carlo t-tests on the NRMSE statistic from the CLSP estimator.
@@ -264,12 +270,16 @@ def CLSPTTest(
     sample_size : int, default = 50
         Size of the Monte Carlo simulated sample under H₀.
 
-    seed : int or None, optional
+    seed : int or None, default = None
         Optional random seed to override the default.
 
-    distribution : str or None
+    distribution : str or None, default = None
         Distribution for generating synthetic b vectors. One of:
         'normal', 'uniform', 'laplace'. Defaults to standard normal.
+
+    partial : bool, default = False
+        If True, runs the t-test on the partial NRMSE: during simulation,
+        the C-block entries are preserved and the M-block entries are simulated.
 
     Returns
     -------
@@ -290,8 +300,8 @@ def CLSPTTest(
         self.rng  = np.random.default_rng(self.seed)
     if distribution is None:
         distribution = 'normal'
-    dist_fn   = {
-        'normal' :  lambda n: self.rng.normal(loc=0, scale=1, size=(n, 1)),
+    dist_fn = {
+        'normal' : lambda n: self.rng.normal(loc=0,  scale=1, size=(n, 1)),
         'uniform': lambda n: self.rng.uniform(-1, 1, size=(n, 1)),
         'laplace': lambda n: self.rng.laplace(loc=0, scale=1, size=(n, 1))
     }.get(distribution.lower())
@@ -301,20 +311,34 @@ def CLSPTTest(
     # (t-test) Simulated NRMSE distribution under H0
     if len(self.nrmse_ttest) != sample_size or reset:
         tmp = copy.deepcopy(self)
-        self.nrmse_ttest        = [None] * sample_size
+        self.nrmse_ttest            = [None] * sample_size
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=RuntimeWarning)
             warnings.filterwarnings("ignore", message=".*tmp.*")
+            if partial and self.A.shape[0] == self.C_idx[0]:
+                warnings.warn(
+                "No M-block present in A; falling back to full NRMSE t-test.",
+                RuntimeWarning)
+                partial = False
             for i in range(sample_size):
-                tmp.b               = dist_fn(self.b.shape[0])
+                tmp.b               = (dist_fn(self.b.shape[0])
+                                       if not partial else
+                                       np.vstack([self.b[:self.C_idx[0]],
+                                       dist_fn(self.b[self.C_idx[0]:].shape[0])
+                                       ]))             # simulate b_M only
                 tmp.solve()
-                self.nrmse_ttest[i] = tmp.nrmse
+                self.nrmse_ttest[i] = (tmp.nrmse
+                                       if not partial else
+                                       tmp.nrmse_partial)
 
     # Return the t-test
     nrmse_null = np.array(self.nrmse_ttest)
     mean_null  = np.mean(nrmse_null)
     std_null   = np.std(nrmse_null, ddof=1)
-    t_stat     = (self.nrmse - mean_null) / (std_null / np.sqrt(sample_size))
+    t_stat     = (((self.nrmse
+                   if partial == False else
+                   self.nrmse_partial) - mean_null) /
+                  (std_null / np.sqrt(sample_size)))
     p_left     = stats.t.cdf(t_stat, df=sample_size - 1)
     p_right    = 1 - p_left
     p_two      = stats.t.sf(abs(t_stat), df=sample_size - 1) * 2
@@ -322,7 +346,9 @@ def CLSPTTest(
         "p_one_left" : p_left,
         "p_one_right": p_right,
         "p_two_sided": p_two,
-        "nrmse"      : self.nrmse,
+        "nrmse"      : (self.nrmse
+                        if partial == False else
+                        self.nrmse_partial),
         "mean_null"  : mean_null,
         "std_null"   : std_null
     }
