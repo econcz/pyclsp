@@ -174,7 +174,7 @@ def CLSPSolveInstance(
                          f"got {self.Z.shape}")
     for n_iter in range(1, 1 +
                            (r if self.A.shape[0] > self.C_idx[0] else 1)):
-        # save A, zhat, and NRMSE from the previous step, construct Q
+        # save NRMSE from the previous step, construct Q and Z
         if n_iter > 1:
             nrmse_prev = (np.linalg.norm(self.b  - self.A @ self.zhat) /
                           np.sqrt(self.b.shape[0]) / np.std(self.b))
@@ -182,6 +182,12 @@ def CLSPSolveInstance(
                                      self.A @ self.zhat)[self.C_idx[0]:])
             self.canonize(problem, C, S, M, Q, self.b.reshape(-1, 1),
                                    m, p, i, j, zero_diagonal)
+            Z_delta    = self.A.shape[1] - self.Z.shape[0]
+            if Z_delta > 0:                            # augment Z by I
+               self.Z  = np.block([[self.Z,
+                                    np.zeros((self.Z.shape[0], Z_delta))],
+                                   [np.zeros((Z_delta, self.Z.shape[1])),
+                                    np.eye(Z_delta, dtype=np.float64)]])
         # solve via the Bott–Duffin inverse
         self.zhat      = (la.pinv(self.Z @ (self.A.T @ self.A) @ self.Z) @
                           self.Z @ self.A.T) @ self.b
