@@ -193,6 +193,10 @@ This method performs a two-step estimation:
 `Z` : *np.ndarray* or *None*
     A symmetric idempotent matrix (projector) defining the subspace for Bott–Duffin pseudoinversion. If *None*, the identity matrix is used, reducing the Bott–Duffin inverse to the Moore–Penrose case.
 
+`rcond` : *float* or *bool*, default = *False*  
+    Regularization parameter for the Moore-Penrose and Bott-Duffin inverses, providing numerically stable inversion and ensuring convergence of singular values.
+    If True, an automatic tolerance equal to `tolerance` is applied. If set to a float, it specifies the relative cutoff below which small singular values are treated as zero.
+
 `tolerance` : *float*, default = *square root of machine epsilon*
     Convergence tolerance for NRMSE change between refinement iterations.
 

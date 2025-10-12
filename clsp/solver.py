@@ -19,6 +19,7 @@ def CLSPSolveInstance(
           i:     int             = 1,    j: int                 = 1,
           zero_diagonal:   bool  = False,
           r:     int             = 1,    Z: np.ndarray |  None  = None,
+          rcond:           float                       |  bool  = False,
           tolerance:       float                       |  None  = None,
           iteration_limit: int                         |  None  = None,
           final: bool            = True, alpha: float  |  None  = None,
@@ -68,6 +69,14 @@ def CLSPSolveInstance(
         A symmetric idempotent matrix (projector) defining the subspace for
         Bott–Duffin pseudoinversion. If None, the identity matrix is used,
         reducing to the Moore–Penrose case.
+
+    rcond : float or bool, default=False
+        Regularization parameter for the Moore-Penrose and Bott-Duffin
+        inverses, providing numerically stable inversion and ensuring
+        convergence of singular values. If True, an automatic tolerance
+        equal to `tolerance` is applied. If set to a float, it specifies
+        the relative cutoff below which small singular values are treated
+        as zero.
 
     tolerance : float or None, default = None
         Convergence tolerance for NRMSE change between iterations.
@@ -189,8 +198,11 @@ def CLSPSolveInstance(
                                    [np.zeros((Z_delta, self.Z.shape[1])),
                                     np.eye(Z_delta, dtype=np.float64)]])
         # solve via the Bott–Duffin inverse
-        self.zhat      = (la.pinv(self.Z @ (self.A.T @ self.A) @ self.Z) @
-                          self.Z @ self.A.T) @ self.b
+        self.zhat      = (la.pinv(self.Z @ (self.A.T @ self.A) @ self.Z,
+                          atol=0.0, rtol=(None      if rcond == False else
+                                          tolerance if rcond == True  else
+                                          rcond))
+                          @ self.Z @ self.A.T) @ self.b
         self.nrmse     = (lambda residuals, sd:
                           np.linalg.norm(residuals) / np.sqrt(sd.shape[0]) /
                           np.std(sd) if not np.isclose(np.std(sd), 0) else
@@ -230,8 +242,10 @@ def CLSPSolveInstance(
         p_cvx = cp.Problem(cp.Minimize(f_obj), c_cvx)
         # solve
         try:
+            kw = {k: v for k, v in kwargs.items()
+                       if k not in {"rcond"}}
             p_cvx.solve(*args, solver=s_cvx, verbose=False,
-                        **kwargs)                      # pass arguments
+                        **kw)                          # pass arguments
             if z_cvx.value is None:
                 warnings.warn(
                     f"Step 2 infeasible ({p_cvx.status}); falling back",
@@ -243,7 +257,7 @@ def CLSPSolveInstance(
                 self.nrmse = (lambda residuals, sd:
                           np.linalg.norm(residuals) / np.sqrt(sd.shape[0]) /
                           np.std(sd) if not np.isclose(np.std(sd), 0) else
-                          np.inf)(self.b - self.A @ self.z,    self.b)
+                          np.inf)(self.b - self.A @ self.z,   self.b)
         except (cp.SolverError, ValueError):
             self.z = self.zhat
     else:
@@ -269,11 +283,11 @@ def CLSPSolveInstance(
                           1  -  (np.linalg.norm(residuals) ** 2            /
                           np.linalg.norm(sd - np.mean(sd)) ** 2)
                           if not np.isclose(np.std(sd), 0) else
-                          np.nan)(residuals_M,                 b_M)
+                          np.nan)(residuals_M,  b_M)
         self.nrmse_partial = (lambda residuals, sd:
                           np.linalg.norm(residuals) / np.sqrt(sd.shape[0]) /
                           np.std(sd) if not np.isclose(np.std(sd), 0) else
-                          np.inf)(residuals_M,                 b_M)
+                          np.inf)(residuals_M,  b_M)
         del M, b_M, residuals_M
 
     # (z_lower), (z_upper) Condition-weighted confidence band
