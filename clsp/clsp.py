@@ -63,16 +63,16 @@ class CLSP:
 
         self.final : bool
             Whether to run the second-stage convex refinement. If True,
-            the estimate is regularized via convex programming.
+            the estimate is corrected via convex programming.
 
         self.alpha : float or None
             Regularization parameter:
-            - α = 0: Lasso (L1 penalty),
-            - α = 1: Ridge (L2 penalty),
-            - 0 < α < 1: Elastic Net combination.
+            - α = 0: Lasso (L1 norm),
+            - α = 1: Ridge (L2 norm),
+            - 0 < α < 1: Elastic Net.
 
         self.z : np.ndarray or None
-            Final estimate of z after regularization (if final is True).
+            Final estimate of z after correction (if final is True).
             If skipped, z = zhat.
 
         self.x : np.ndarray or None
@@ -83,7 +83,7 @@ class CLSP:
 
         self.r : int
             Number of refinement iterations performed during Step 1.
-            Iteration stops when NRMSE stabilizes or exceeds the limit.
+            Iteration stops when NRMSE stabilizes or the limit is reached.
 
         self.kappaC : float or None
             Condition number of the constraint block C (upper-left block
@@ -101,35 +101,35 @@ class CLSP:
             Total RMSA (Root Mean Square Adjustment) over all rows.
 
         self.rmsa_i : list of float
-            Change in RMSA caused by removing each row from [C | S]
+            Change in RMSA caused by removing one row from [C | S]
             and re-estimating the CLSP solution.
 
         self.rmsa_dkappaC : list of float
-            Change in κ(C) caused by removing each row from [C | S]
+            Change in κ(C) caused by removing one row from [C | S]
             and re-estimating the CLSP solution.
 
         self.rmsa_dkappaB : list of float
-            Change in κ(B) caused by removing each row from [C | S]
+            Change in κ(B) caused by removing one row from [C | S]
             and re-estimating the CLSP solution.
 
         self.rmsa_dkappaA : list of float
-            Change in κ(A) caused by removing each row from [C | S]
+            Change in κ(A) caused by removing one row from [C | S]
             and re-estimating the CLSP solution.
 
         self.rmsa_dnrmse : list of float
-            Change in NRMSE caused by removing each row from [C | S]
+            Change in NRMSE caused by removing one row from [C | S]
             and re-estimating the CLSP solution.
 
         self.rmsa_dzhat : list of float
-            Change in zhat caused by removing each row from [C | S]
+            Change in zhat caused by removing one row from [C | S]
             and re-estimating the CLSP solution.
 
         self.rmsa_dz : list of float
-            Change in z caused by removing each row from [C | S]
+            Change in z caused by removing one row from [C | S]
             and re-estimating the CLSP solution.
 
         self.rmsa_dx : list of float
-            Change in x caused by removing each row from [C | S]
+            Change in x caused by removing one row from [C | S]
             and re-estimating the CLSP solution.
 
         self.r2_partial : float or None

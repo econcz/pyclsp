@@ -99,7 +99,11 @@ def CLSPCanonicalForm(
                              np.ones((1, p)))
         col_groups = np.kron(np.ones((1, m)), np.kron(np.eye(p // j),
                                                       np.ones((1, j))))
-        C = np.vstack([row_groups, col_groups])
+        if C is not None:
+            if C.shape[1] != row_groups.shape[1]:
+                raise self.error(f"C must have {row_groups.shape[1]} columns")
+        C =     (np.vstack([row_groups, col_groups, C]) if C is not None
+            else np.vstack([row_groups, col_groups]))
         # append an optional identity matrix to M, remove duplicates
         if zero_diagonal:
             M_diag = np.zeros((min(m, p), m * p))
