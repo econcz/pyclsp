@@ -7,7 +7,7 @@ import scipy.stats  as stats
 import cvxpy        as cp
 from types          import MethodType
 from .errors        import CLSPError
-from .utils         import CLSPCanonicalForm, CLSPCorrelogram, CLSPTTest
+from .utils         import CLSPCanonicalForm, CLSPCorrelogram, CLSPTTest, CLSPSummary
 from .solver        import CLSPSolve
 
 class CLSP:
@@ -243,6 +243,8 @@ class CLSP:
         self.solve          = MethodType(CLSPSolve,         self)
         self.corr           = MethodType(CLSPCorrelogram,   self)
         self.ttest          = MethodType(CLSPTTest,         self)
+        self.summarize      = MethodType(CLSPSummary,       self)
+        self.summary        = MethodType(CLSPSummary,       self)
 
     def __repr__(self):
         """

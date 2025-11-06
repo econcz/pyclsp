@@ -256,15 +256,18 @@ def CLSPCorrelogram(
 def CLSPTTest(
     self, reset:       bool = False,       sample_size:  int   = 50,
           seed:        int  | None = None, distribution: str   | None = None,
-          partial:     bool = False
+          partial:     bool = False,       simulate:     bool  = False,
 ) -> dict[str, float]:
     """
-    Perform Monte Carlo t-tests on the NRMSE statistic from the CLSP estimator.
+    Perform bootstrap or Monte Carlo t-tests on the NRMSE statistic from
+    the CLSP estimator.
 
-    This function generates synthetic right-hand side vectors `b` using a 
-    user-defined or default distribution and recomputes the estimator. It 
-    tests whether the observed NRMSE significantly deviates from the null 
-    distribution of simulated NRMSE values.
+    This function either (a) resamples residuals via a nonparametric
+    bootstrap to generate an empirical NRMSE sample, or (b) produces
+    synthetic right-hand side vectors `b` from a user-defined or default
+    distribution and re-estimates the model. It tests whether the observed
+    NRMSE significantly deviates from the null distribution of resampled or
+    simulated NRMSE values.
 
     Parameters
     ----------
@@ -284,6 +287,12 @@ def CLSPTTest(
     partial : bool, default = False
         If True, runs the t-test on the partial NRMSE: during simulation,
         the C-block entries are preserved and the M-block entries are simulated.
+
+    simulate : bool, default = False
+        If True, performs a parametric Monte Carlo simulation by generating
+        synthetic right-hand side vectors `b`. If False (default), executes
+        a nonparametric bootstrap procedure on residuals without
+        re-estimation.
 
     Returns
     -------
@@ -312,10 +321,8 @@ def CLSPTTest(
     if dist_fn is None:
         raise self.error(f"Unsupported distribution: {distribution}")
 
-    # (t-test) Simulated NRMSE distribution under H0
+    # (t-test) Bootstrap-resampled or simulated NRMSE distribution under H0
     if len(self.nrmse_ttest) != sample_size or reset:
-        tmp = copy.deepcopy(self)
-        self.nrmse_ttest            = [None] * sample_size
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=RuntimeWarning)
             warnings.filterwarnings("ignore", message=".*tmp.*")
@@ -324,16 +331,36 @@ def CLSPTTest(
                 "No M-block present in A; falling back to full NRMSE t-test.",
                 RuntimeWarning)
                 partial = False
-            for i in range(sample_size):
-                tmp.b               = (dist_fn(self.b.shape[0])
-                                       if not partial else
-                                       np.vstack([self.b[:self.C_idx[0]],
-                                       dist_fn(self.b[self.C_idx[0]:].shape[0])
-                                       ]))             # simulate b_M only
-                tmp.solve()
-                self.nrmse_ttest[i] = (tmp.nrmse
-                                       if not partial else
-                                       tmp.nrmse_partial)
+            self.nrmse_ttest = [None] * sample_size
+            # (re)generate a nonparametric bootstrap sample
+            if not simulate:
+                for i in range(sample_size):
+                    residuals = (lambda residuals:
+                                 residuals[self.rng.choice(len(residuals),
+                                           size=len(residuals), replace=True)])(
+                                (lambda residuals, partial:
+                                 residuals if not partial else
+                                 residuals[self.C_idx[0]:])(self.A @ self.zhat -
+                                                            self.b, partial))
+                    b         = (self.b    if not partial else
+                                 self.b[self.C_idx[0]:])
+                    self.nrmse_ttest[i] = (lambda residuals, sd:
+                              np.linalg.norm(residuals) / np.sqrt(sd.shape[0]) /
+                              np.std(sd) if not np.isclose(np.std(sd), 0) else
+                              np.inf)(residuals.ravel(), b)
+            # (re)generate a parametric Monte Carlo sample
+            else:
+                tmp = copy.deepcopy(self)
+                for i in range(sample_size):
+                    tmp.b               = (dist_fn(self.b.shape[0])
+                                           if not partial else
+                                           np.vstack([self.b[:self.C_idx[0]],
+                                           dist_fn(self.b[self.C_idx[0]:].shape[0])
+                                           ]))             # simulate b_M only
+                    tmp.solve()
+                    self.nrmse_ttest[i] = (tmp.nrmse
+                                           if not partial else
+                                           tmp.nrmse_partial)
 
     # Return the t-test
     nrmse_null = np.array(self.nrmse_ttest)
@@ -356,3 +383,102 @@ def CLSPTTest(
         "mean_null"  : mean_null,
         "std_null"   : std_null
     }
+
+def CLSPSummary(
+    self, display:     bool = False
+) -> dict[str, object] | None:
+    """
+    Return or print a summary for the CLSP estimator.
+
+    Parameters
+    ----------
+    display : bool, default = False
+        If True, prints the summary instead of returning a dictionary.
+    """
+    # Define an ancillary np.ndarray summarizing function
+    def _summary(a):
+        if  a is None or len(np.atleast_1d(a)) == 0 or np.all(np.isnan(a)):
+            return dict(min=np.nan, max=np.nan, mean=np.nan, sd=np.nan)
+        v = np.asarray(a, dtype=float)
+        return dict( min=np.nanmin(v), max=np.nanmax(v),
+                    mean=np.nanmean(v), sd=np.nanstd(v, ddof=1))
+    summary                     = {k: v for k, v in self.__dict__.items()
+                                   if k not in {"A", "C_idx", "b",
+                                                "Z", "zhat" ,
+                                                "z", "x", "y",
+                                                "nrmse_ttest"} and
+                                        not callable(v)}
+    if self.zhat is not None:
+        summary  = {'inverse'   : ("Bott-Duffin" if self.Z is not None and
+                                                    not np.allclose(self.Z,
+                                                    np.eye(self.Z.shape[0]),
+                                                    rtol=self.tolerance,
+                                                    atol=self.tolerance) else
+                                   "Moore-Penrose"),          **summary}
+    if self.rmsa is not None:
+        summary["rmsa_i"]       = _summary(summary.get("rmsa_i"))
+        summary["rmsa_dkappaC"] = _summary(summary.get("rmsa_dkappaC"))
+        summary["rmsa_dkappaB"] = _summary(summary.get("rmsa_dkappaB"))
+        summary["rmsa_dkappaA"] = _summary(summary.get("rmsa_dkappaA"))
+        summary["rmsa_dnrmse"]  = _summary(summary.get("rmsa_dnrmse"))
+        summary["rmsa_dzhat"]   = _summary(summary.get("rmsa_dzhat"))
+        summary["rmsa_dz"]      = _summary(summary.get("rmsa_dz"))
+        summary["rmsa_dx"]      = _summary(summary.get("rmsa_dx"))
+    if self.z    is not None:
+        summary["z_lower"]      = _summary(summary.get("z_lower"))
+        summary["z_upper"]      = _summary(summary.get("z_upper"))
+        summary["x_lower"]      = _summary(summary.get("x_lower"))
+        summary["x_upper"]      = _summary(summary.get("x_upper"))
+        summary["y_lower"]      = _summary(summary.get("y_lower"))
+        summary["y_upper"]      = _summary(summary.get("y_upper"))
+
+    # (summary) Return the summary
+    if not display:
+        return summary or None
+
+    # (summary) Print the result
+    def _print(d, k, p=None, n=None):
+        k = k if isinstance(k, list) else [k]
+        n = n if isinstance(n, list) else [n]
+        p = p or ''
+        for i in range(len(k)):
+            v = d.get(f"{p}{k[i]}")
+            l = n[i] if i < len(n) and n[i] else k[i]
+            if not isinstance(v, dict):                # print value
+                fmt = "  {:<20} {:>15}"
+                print(fmt.format(f"{l}:", _format(v)))
+            else:                                      # print list
+                fmt = "  {:<14}  min={:>10}  max={:>10}  mean={:>10}  sd={:>10}"
+                print(fmt.format(f"{l}:", _format(v.get('min')),
+                                          _format(v.get('max')),
+                                          _format(v.get('mean')),
+                                          _format(v.get('sd'))))
+    def _format(v, width=10):
+        fmt = f"{{:>{width}}}"
+        if          (not isinstance(v, (int, float, np.number)) or
+                         isinstance(v, int)):
+            return fmt.format(str(v))
+        if v is None or (isinstance(v, float) and np.isnan(v)):
+            return fmt.format("nan")
+        dp       = max(3, width // 2 - 1)
+        ep       = max(2, dp - 1)
+        return fmt.format(f"{v:.{dp}f}" if (abs(v) >= 10**-(dp + 1)      and
+                                            abs(v) <  10**(width - dp)   and
+                                            len(f"{v:.{dp}f}") <= width) else
+                          f"{v:.{ep}e}")
+    print("Estimator Configuration:")
+    _print(summary, "inverse",   n="Generalized inverse")
+    _print(summary, "r",         n="Iterations (r)")
+    _print(summary, "tolerance", n="Tolerance")
+    _print(summary, "final",     n="Final correction")
+    _print(summary, "alpha",     n="Regularization (α)")
+    print("\nNumerical Stability:")
+    _print(summary, ["kappaC", "kappaB", "kappaA"])
+    if summary.get("rmsa")    is not None:
+        _print(summary, "rmsa")
+        _print(summary, ["i", "dkappaC", "dkappaB", "dkappaA",
+                         "dnrmse", "dzhat", "dz", "dx"], p="rmsa_")
+    print("\nGoodness of Fit:")
+    _print(summary, ["r2_partial", "nrmse", "nrmse_partial"])
+    _print(summary, ["z_lower", "z_upper", "x_lower", "x_upper",
+                     "y_lower", "y_upper"])

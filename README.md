@@ -57,21 +57,12 @@ model    = CLSP().solve(
 # results
 print("true beta (x_M):")
 print(np.round(np.asarray(b_true).flatten(), 4))
-
 print("beta hat (x_M hat):")
 print(np.round(model.x.flatten(), 4))
 
-print("\nNumerical stability:")
-print("  kappaC :", round(model.kappaC, 4))
-print("  kappaB :", round(model.kappaB, 4))
-print("  kappaA :", round(model.kappaA, 4))
+model.summary(display=True)
 
-print("\nGoodness-of-fit:")
-print("  R2_partial           :", round(model.r2_partial,    6))
-print("  NRMSE_partial        :", round(model.nrmse_partial, 6))
-print("  Diagnostic band (min):", np.round(np.min(model.x_lower), 4))
-print("  Diagnostic band (max):", np.round(np.max(model.x_upper), 4))
-print("  Monte Carlo t-test:")
+print("  Bootstrap t-test:")
 for kw, val in model.ttest(sample_size=30,                   # NRMSE_partial sample
                            seed=seed, distribution="normal", # seed and distribution
                            partial=True).items():
@@ -193,7 +184,7 @@ This method performs a two-step estimation:
 `Z` : *np.ndarray* or *None*
     A symmetric idempotent matrix (projector) defining the subspace for Bott–Duffin pseudoinversion. If *None*, the identity matrix is used, reducing the Bott–Duffin inverse to the Moore–Penrose case.
 
-`rcond` : *float* or *bool*, default = *False*  
+`rcond` : *float* or *bool*, default = *False*
     Regularization parameter for the Moore-Penrose and Bott-Duffin inverses, providing numerically stable inversion and ensuring convergence of singular values.
     If True, an automatic tolerance equal to `tolerance` is applied. If set to a float, it specifies the relative cutoff below which small singular values are treated as zero.
 
@@ -263,13 +254,12 @@ Additionally, it computes the total `rmsa` statistic across all rows, summarizin
 ### T-Test Method: `ttest`
 
 ```python
-self.ttest(reset, sample_size, seed, distribution)
+self.ttest(reset, sample_size, seed, distribution, partial, simulate)
 ```
 
-Performs a Monte Carlo-based one- or two-sided t-test on the NRMSE statistic.
+Perform bootstrap or Monte Carlo t-tests on the NRMSE statistic from the CLSP estimator.
 
-This function simulates right-hand side vectors `b` using a user-defined or default distribution and recomputes the estimator for every new `b`. It
-tests whether the observed NRMSE significantly deviates from the null distribution (under H₀) of simulated NRMSE values. The quality of the test depends on the size of the simulated sample.
+This function either (a) resamples residuals via a nonparametric bootstrap to generate an empirical NRMSE sample, or (b) produces synthetic right-hand side vectors `b` from a user-defined or default distribution and re-estimates the model. It tests whether the observed NRMSE significantly deviates from the null distribution of resampled or simulated NRMSE values.
 
 **Parameters:**
 `reset` : *bool*, default = *False*
@@ -287,6 +277,9 @@ tests whether the observed NRMSE significantly deviates from the null distributi
 `partial` : *bool*, default = *False*
     If True, runs the t-test on the partial NRMSE: during simulation, the C-block entries are preserved and the M-block entries are simulated.
 
+`simulate` : bool, default = **False**
+    If True, performs a parametric Monte Carlo simulation by generating synthetic right-hand side vectors `b`. If False (default), executes a nonparametric bootstrap procedure on residuals without re-estimation.
+
 **Returns:**
 *dict*
     Dictionary with test results and null distribution statistics:
@@ -299,8 +292,35 @@ tests whether the observed NRMSE significantly deviates from the null distributi
         `'std_null'`    : standard deviation of the null distribution (under H₀)
     }
 
+### Summary Method: `summarize` or `summary`
+
+```python
+self.summarize(display)
+self.summary(display)
+```
+
+Return or print a summary for the CLSP estimator.
+
+**Parameters:**
+`display` : bool, default = **False**
+    If True, prints the summary instead of returning a dictionary.
+
+**Returns:**
+*dict*
+    Dictionary of estimator configuration, numerical stability, and goodness of fit statistics:
+    {
+        `'inverse'`    : type of generalized inverse used ('Bott-Duffin' or 'Moore-Penrose'),
+        ...
+        `'final'`      : boolean flag indicating whether the second step was present,
+        ...
+        `'rmsa'`       : total RMSA,
+        ...
+        `'r2_partial'` : coefficient of determination for the M block within A,
+        ...
+    }
+
 ## Bibliography
-To be added.
+Bolotov, I. (2025). CLSP: Linear Algebra Foundations of a Modular Two-Step Convex Optimization-Based Estimator for Ill-Posed Problems. *Mathematics*, *13*(21), 3476. [https://doi.org/10.3390/math13213476](https://doi.org/10.3390/math13213476)
 
 ## License
 MIT License — see the [LICENSE](LICENSE) file.
