@@ -106,14 +106,16 @@ def CLSPCanonicalForm(
             else np.vstack([row_groups, col_groups]))
         # append an optional identity matrix to M, remove duplicates
         if zero_diagonal:
+            M_flag = (M is None or
+                      M.size == 0)
             M_diag = np.zeros((min(m, p), m * p))
             for k in range(min(m, p)):
                 M_diag[k, k * p + k] = 1
-            M, idx = np.unique(M_diag.copy() if M is None or M.size == 0
+            M, idx = np.unique(M_diag.copy() if M_flag
                                              else np.vstack([M, M_diag]),
                                axis=0,       return_index=True)
             self.b = np.vstack([self.b[0:C.shape[0]],
-                                np.zeros((min(m, p), 1)) if M is None
+                                np.zeros((min(m, p), 1)) if M_flag
                                 else np.vstack([self.b[C.shape[0]:],
                                 np.zeros((min(m, p), 1))])[idx.reshape(-1)]])
             del M_diag, idx
@@ -334,14 +336,14 @@ def CLSPTTest(
             self.nrmse_ttest = [None] * sample_size
             # (re)generate a nonparametric bootstrap sample
             if not simulate:
+                residuals = self.A @ self.zhat - self.b
                 for i in range(sample_size):
                     residuals = (lambda residuals:
                                  residuals[self.rng.choice(len(residuals),
                                            size=len(residuals), replace=True)])(
                                 (lambda residuals, partial:
                                  residuals if not partial else
-                                 residuals[self.C_idx[0]:])(self.A @ self.zhat -
-                                                            self.b, partial))
+                                 residuals[self.C_idx[0]:])(residuals, partial))
                     b         = (self.b    if not partial else
                                  self.b[self.C_idx[0]:])
                     self.nrmse_ttest[i] = (lambda residuals, sd:

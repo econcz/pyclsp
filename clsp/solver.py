@@ -199,8 +199,8 @@ def CLSPSolveInstance(
                                     np.eye(Z_delta, dtype=np.float64)]])
         # solve via the Bott–Duffin inverse
         self.zhat      = (la.pinv(self.Z @ (self.A.T @ self.A) @ self.Z,
-                          atol=0.0, rtol=(None      if rcond == False else
-                                          tolerance if rcond == True  else
+                          atol=0.0, rtol=(None           if rcond == False else
+                                          self.tolerance if rcond == True  else
                                           rcond))
                           @ self.Z @ self.A.T) @ self.b
         self.nrmse     = (lambda residuals, sd:
