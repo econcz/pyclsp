@@ -1,6 +1,6 @@
 [project]
 name = "pyclsp"
-version = "1.8.8"
+version = "2.0.0"
 description = "Modular Two-Step Convex Optimization Estimator for Ill-Posed Problems"
 readme = "README.md"
 requires-python = ">=3.10"

@@ -167,6 +167,8 @@ def CLSPSolveInstance(
         self.Z = Z
     elif self.Z is None:
         self.Z = np.eye(self.A.shape[1], dtype=np.float64)
+    else:
+        self.Z = self.Z[0:self.A.shape[1], 0:self.A.shape[1]]
     if tolerance       is not None:
         self.tolerance       = tolerance
     if iteration_limit is not None:
