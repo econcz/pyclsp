@@ -52,6 +52,10 @@ class CLSP:
             Projection matrix for Bott–Duffin inversion. Must be symmetric
             and idempotent. Defaults to identity for Moore–Penrose.
 
+        self.rcond : float
+            Regularization parameter for the Moore-Penrose and Bott-Duffin
+            inverses.
+
         self.tolerance : float
             Convergence tolerance for NRMSE change between iterations.
 
@@ -121,15 +125,15 @@ class CLSP:
             and re-estimating the CLSP solution.
 
         self.rmsa_dzhat : list of float
-            Change in zhat caused by removing one row from [C | S]
+            Change in ‖zhat‖_2 caused by removing one row from [C | S]
             and re-estimating the CLSP solution.
 
         self.rmsa_dz : list of float
-            Change in z caused by removing one row from [C | S]
+            Change in ‖z‖_2 caused by removing one row from [C | S]
             and re-estimating the CLSP solution.
 
         self.rmsa_dx : list of float
-            Change in x caused by removing one row from [C | S]
+            Change in ‖x‖_F|2 caused by removing one row from [C | S]
             and re-estimating the CLSP solution.
 
         self.r2_partial : float or None
@@ -197,46 +201,46 @@ class CLSP:
             one-sided and two-sided p-values based on simulated means.
         """
         # Variables
-        self.A              : np.ndarray | None = None # design matrix, [C|S;M|Q]
-        self.C_idx          : tuple[int  | None,  int  | None]                  \
-                            = (None, None)             # indices of the C block
-        self.b              : np.ndarray | None = None # right-hand side
-        self.Z              : np.ndarray | None = None # B-D subspace matrix
+        self.A              : np.ndarray | None = None  # design matrix, [C|S;M|Q]
+        self.C_idx          : tuple[int  | None,  int  | None]                 \
+                            = (None, None)              # indices of the C block
+        self.b              : np.ndarray | None = None  # right-hand side
+        self.Z              : np.ndarray | None = None  # B-D subspace matrix
+        self.rcond          : float      | bool = False # regularization parameter
         self.tolerance      : float = float(np.sqrt(np.finfo(float).eps))
-        self.iteration_limit: int               = 50   # limit  of iterations
-        self.r              : int               = 0    # number of iterations
-        self.zhat           : np.ndarray | None = None # first-step estimate
-        self.final          : bool              = True # inclusion of second step
-        self.alpha          : float      | None = None # regularization parameter
-        self.z              : np.ndarray | None = None # final solution
-        self.x              : np.ndarray | None = None # variable component of z
-        self.y              : np.ndarray | None = None # slack component of z
-        self.kappaC         : float      | None = None # spectral κ() for C_canon
-        self.kappaB         : float      | None = None # spectral κ() for B^(r)
-        self.kappaA         : float      | None = None # spectral κ() for A^(r)
-        self.rmsa           : float      | None = None # total RMSA
-        self.rmsa_i         : list[float]       = []   # list of row RMSA
-        self.rmsa_dkappaC   : list[float]       = []   # list of Δκ(C)
-        self.rmsa_dkappaB   : list[float]       = []   # list of Δκ(B)
-        self.rmsa_dkappaA   : list[float]       = []   # list of Δκ(A)
-        self.rmsa_dnrmse    : list[float]       = []   # list of ΔNRMSE
-        self.rmsa_dzhat     : list[float]       = []   # list of Δzhat
-        self.rmsa_dz        : list[float]       = []   # list of Δz
-        self.rmsa_dx        : list[float]       = []   # list of Δx
-        self.r2_partial     : float      | None = None # R^2   for the M block
-        self.nrmse          : float      | None = None # NRMSE for A
-        self.nrmse_partial  : float      | None = None # NRMSE for the M block
-        self.nrmse_ttest    : list[float]       = []   # list of NRMSE
-        self.z_lower        : np.ndarray | None = None # lower confidence band
-        self.z_upper        : np.ndarray | None = None # upper confidence band
-        self.x_lower        : np.ndarray | None = None # lower confidence band
-        self.x_upper        : np.ndarray | None = None # upper confidence band
-        self.y_lower        : np.ndarray | None = None # lower confidence band
-        self.y_upper        : np.ndarray | None = None # upper confidence band
-        self.seed           : int               = 123456789 # Monte Carlo
+        self.iteration_limit: int               = 50    # limit  of iterations
+        self.r              : int               = 0     # number of iterations
+        self.zhat           : np.ndarray | None = None  # first-step estimate
+        self.final          : bool              = True  # inclusion of second step
+        self.alpha          : float      | None = None  # regularization parameter
+        self.z              : np.ndarray | None = None  # final solution
+        self.x              : np.ndarray | None = None  # variable component of z
+        self.y              : np.ndarray | None = None  # slack component of z
+        self.kappaC         : float      | None = None  # spectral κ() for C_canon
+        self.kappaB         : float      | None = None  # spectral κ() for B^(r)
+        self.kappaA         : float      | None = None  # spectral κ() for A^(r)
+        self.rmsa           : float      | None = None  # total RMSA
+        self.rmsa_i         : list[float]       = []    # list of row RMSA
+        self.rmsa_dkappaC   : list[float]       = []    # list of Δκ(C)
+        self.rmsa_dkappaB   : list[float]       = []    # list of Δκ(B)
+        self.rmsa_dkappaA   : list[float]       = []    # list of Δκ(A)
+        self.rmsa_dnrmse    : list[float]       = []    # list of ΔNRMSE
+        self.rmsa_dzhat     : list[float]       = []    # list of Δ‖zhat‖_2
+        self.rmsa_dz        : list[float]       = []    # list of Δ‖z‖_2
+        self.rmsa_dx        : list[float]       = []    # list of Δ‖x‖_F|2
+        self.r2_partial     : float      | None = None  # R^2   for the M block
+        self.nrmse          : float      | None = None  # NRMSE for A
+        self.nrmse_partial  : float      | None = None  # NRMSE for the M block
+        self.nrmse_ttest    : list[float]       = []    # list of NRMSE
+        self.z_lower        : np.ndarray | None = None  # lower confidence band
+        self.z_upper        : np.ndarray | None = None  # upper confidence band
+        self.x_lower        : np.ndarray | None = None  # lower confidence band
+        self.x_upper        : np.ndarray | None = None  # upper confidence band
+        self.y_lower        : np.ndarray | None = None  # lower confidence band
+        self.y_upper        : np.ndarray | None = None  # upper confidence band
+        self.seed           : int               = 123456789  # Monte Carlo
         self.rng            = np.random.default_rng(self.seed)
         self.distribution   = lambda n: self.rng.normal(loc=0, scale=1, size=n)
-
         # Methods
         self.error          = CLSPError
         self.canonize       = MethodType(CLSPCanonicalForm, self)

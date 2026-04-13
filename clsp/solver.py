@@ -19,7 +19,7 @@ def CLSPSolveInstance(
           i:     int             = 1,    j: int                 = 1,
           zero_diagonal:   bool  = False,
           r:     int             = 1,    Z: np.ndarray |  None  = None,
-          rcond:           float                       |  bool  = False,
+          rcond:           float                       |  None  = None,
           tolerance:       float                       |  None  = None,
           iteration_limit: int                         |  None  = None,
           final: bool            = True, alpha: float  |  None  = None,
@@ -164,11 +164,13 @@ def CLSPSolveInstance(
     if r < 1:
         raise self.error("Number of refinement iterations r must be ≥ 1.")
     if Z is not None:
-        self.Z = Z
+        self.Z               = Z
     elif self.Z is None:
-        self.Z = np.eye(self.A.shape[1], dtype=np.float64)
+        self.Z               = np.eye(self.A.shape[1], dtype=np.float64)
     else:
-        self.Z = self.Z[0:self.A.shape[1], 0:self.A.shape[1]]
+        self.Z               = self.Z[0:self.A.shape[1], 0:self.A.shape[1]]
+    if rcond           is not None:
+        self.rcond           = rcond
     if tolerance       is not None:
         self.tolerance       = tolerance
     if iteration_limit is not None:
@@ -200,14 +202,14 @@ def CLSPSolveInstance(
                                    [np.zeros((Z_delta, self.Z.shape[1])),
                                     np.eye(Z_delta, dtype=np.float64)]])
         # solve via the Bott–Duffin inverse
-        self.zhat      = (la.pinv(self.Z @ (self.A.T @ self.A) @ self.Z,
-                          atol=0.0, rtol=(None           if rcond == False else
-                                          self.tolerance if rcond == True  else
-                                          rcond))
-                          @ self.Z @ self.A.T) @ self.b
+        self.zhat      = ((la.pinv(self.Z @ (self.A.T @ self.A) @ self.Z,
+                          atol=0.0, rtol=(None if self.rcond  is False    else
+                                          self.tolerance if self.rcond is True
+                                          else    self.rcond))
+                          @ self.Z @ self.A.T) @ self.b).reshape(-1, 1)
         self.nrmse     = (lambda residuals, sd:
                           np.linalg.norm(residuals) / np.sqrt(sd.shape[0]) /
-                          np.std(sd) if not np.isclose(np.std(sd), 0) else
+                          np.std(sd) if not np.isclose(np.std(sd), 0)     else
                           np.inf)(self.b - self.A @ self.zhat, self.b)
         # break on convergence
         self.r         = n_iter
@@ -217,12 +219,12 @@ def CLSPSolveInstance(
                 del nrmse_prev, Q
                 break
     if not np.all(np.isfinite(self.zhat)):
-        self.zhat = np.nan
+        self.zhat = np.full((self.A.shape[1], 1), np.nan, dtype=np.float64)
         raise self.error("Pseudoinverse estimate zhat failed")
 
     # (z) Final solution (if available), or set self.z = self.zhat
     if final is not None:
-        self.final = final
+        self.final = bool(final)
     if alpha is not None:
         self.alpha = np.float64(max(0, min(1, alpha)))
     if self.final:
@@ -253,17 +255,18 @@ def CLSPSolveInstance(
                     f"Step 2 infeasible ({p_cvx.status}); falling back",
                     category=RuntimeWarning
                 )
-                self.z     = self.zhat
+                self.z     = self.zhat.copy()
             else:
-                self.z     = z_cvx.value
+                self.z = np.asarray(z_cvx.value,
+                                    dtype=np.float64).reshape(-1, 1)
                 self.nrmse = (lambda residuals, sd:
                           np.linalg.norm(residuals) / np.sqrt(sd.shape[0]) /
                           np.std(sd) if not np.isclose(np.std(sd), 0) else
                           np.inf)(self.b - self.A @ self.z,   self.b)
         except (cp.SolverError, ValueError):
-            self.z = self.zhat
+            self.z = self.zhat.copy()
     else:
-        self.z = self.zhat
+        self.z = self.zhat.copy()
 
     # (x), (y) Variable and slack components of z
     self.x = self.z[:self.C_idx[1]].reshape(m if m is not None else -1,
@@ -317,6 +320,7 @@ def CLSPSolveInstance(
 
 def CLSPSolve(
     self, tolerance:      float       | None = None,
+          final: bool                        = True,
           alpha: float  | list[float] | None = None,
           *args, **kwargs
 ) -> "CLSP":
@@ -362,31 +366,37 @@ def CLSPSolve(
     # process alpha
     if tolerance is not None:
         self.tolerance = tolerance
-    if   (alpha  is not None and isinstance(alpha, numbers.Real) and
-          np.isfinite(alpha)):
-        self.alpha = to_alpha(alpha)
-    elif (alpha  is not None and isinstance(alpha, list)):
-        result = {a: to_nrmse(CLSPSolveInstance(self, tolerance=self.tolerance,
-                                                      final=True, alpha=to_alpha(a),
+    if final is True:
+        if   (alpha  is not None and isinstance(alpha, numbers.Real) and
+              np.isfinite(alpha)):
+            self.alpha = to_alpha(alpha)
+        elif (alpha  is not None and isinstance(alpha, list)):
+            result = {a: to_nrmse(CLSPSolveInstance(self,
+                                                    tolerance=self.tolerance,
+                                                    final=final,
+                                                    alpha=to_alpha(a),
+                                                    *args, **kw).nrmse)
+                      for a in alpha
+                      if isinstance(a, numbers.Real) and np.isfinite(a)}
+            if result:
+                self.alpha = to_alpha(min(result, key=result.get))
+            else:
+                alpha = None
+        if   (alpha  is None):                         # error rule
+            nrmse_alpha0 = to_nrmse(CLSPSolveInstance(self,
+                                                      tolerance=self.tolerance,
+                                                      final=final, alpha=0.0,
                                                       *args, **kw).nrmse)
-                  for a in alpha
-                  if isinstance(a, numbers.Real) and  np.isfinite(a)}
-        if result:
-            self.alpha = to_alpha(min(result, key=result.get))
-        else:
-            alpha = None
-    if   (alpha  is None):                             # error rule
-        nrmse_alpha0 = to_nrmse(CLSPSolveInstance(self, tolerance=self.tolerance,
-                                                        final=True, alpha=0.0,
-                                                        *args, **kw).nrmse)
-        nrmse_alpha1 = to_nrmse(CLSPSolveInstance(self, tolerance=self.tolerance,
-                                                        final=True, alpha=1.0,
-                                                        *args, **kw).nrmse)
-        denominator = nrmse_alpha0 + nrmse_alpha1 + self.tolerance
-        if np.isfinite(denominator) and denominator > 0.0:
-            self.alpha = min(1.0, nrmse_alpha0 / denominator)
-        else:
-            self.alpha = 0.5
+            nrmse_alpha1 = to_nrmse(CLSPSolveInstance(self,
+                                                      tolerance=self.tolerance,
+                                                      final=final, alpha=1.0,
+                                                      *args, **kw).nrmse)
+            denominator = nrmse_alpha0 + nrmse_alpha1 + self.tolerance
+            if np.isfinite(denominator) and denominator > 0.0:
+                self.alpha = min(1.0, nrmse_alpha0 / denominator)
+            else:
+                self.alpha = 0.5
 
     return CLSPSolveInstance(self, tolerance=self.tolerance,
-                                   final=True, alpha=self.alpha, *args, **kw)
+                                   final=final, alpha=self.alpha,
+                                   *args, **kw)

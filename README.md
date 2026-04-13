@@ -71,7 +71,7 @@ for kw, val in model.ttest(sample_size=30,                   # NRMSE_partial sam
 
 ## User Reference
 
-For comprehensive information on the estimator’s capabilities, advanced configuration options, and implementation details, please refer to the docstrings provided in each of the individual .py source files. These docstrings contain complete descriptions of available methods, their parameters, expected input formats, and output structures.
+For comprehensive information on the estimator's capabilities, advanced configuration options, and implementation details, please refer to the docstrings provided in each of the individual .py source files. These docstrings contain complete descriptions of available methods, their parameters, expected input formats, and output structures.
 
 ### The `CLSP` Class
 
@@ -121,10 +121,10 @@ total root mean square alignment (RMSA).
 R^2 for the `M` block in `A`.
 
 `self.nrmse` : *float*<br>
-mean square error calculated from `A` and normalized by standard deviation (NRMSE).
+root mean square error calculated from `A` and normalized by standard deviation (NRMSE).
 
 `self.nrmse_partial` : *float*<br>
-mean square error calculated from the `M` block in `A` and normalized by standard deviation (NRMSE).
+root mean square error calculated from the `M` block in `A` and normalized by standard deviation (NRMSE).
 
 `self.z_lower`       : *np.ndarray*<br>
 lower bound of the diagnostic interval (confidence band) based on κ(`A`).
@@ -246,9 +246,9 @@ Additionally, it computes the total `rmsa` statistic across all rows, summarizin
         `"rmsa_dkappaB"` : list of Δκ(`B`) after deleting row `i`,<br>
         `"rmsa_dkappaA"` : list of Δκ(`A`) after deleting row `i`,<br>
         `"rmsa_dnrmse"`  : list of Δ`nrmse` after deleting row `i`,<br>
-        `"rmsa_dzhat"`   : list of Δ`zhat` after deleting row `i`,<br>
-        `"rmsa_dz"`      : list of Δ`z` after deleting row `i`,<br>
-        `"rmsa_dx"`      : list of Δ`x` after deleting row `i`,<br>
+        `"rmsa_dzhat"`   : list of Δ‖`zhat`‖_2 after deleting row `i`,<br>
+        `"rmsa_dz"`      : list of Δ‖`z`‖_2 after deleting row `i`,<br>
+        `"rmsa_dx"`      : list of Δ‖`x`‖_F|2 after deleting row `i`,<br>
     }
 
 ### T-Test Method: `ttest`
@@ -271,13 +271,13 @@ This function either (a) resamples residuals via a nonparametric bootstrap to ge
 `seed` : *int* or *None*, optional<br>
     Optional random seed to override the default.
 
-`distribution` : *str* or *None*, default = *’normal’*<br>
+`distribution` : *str* or *None*, default = *'normal'*<br>
     Distribution for generating simulated `b` vectors. One of (standard): *'normal'*, *'uniform'*, or *'laplace'*.
     
 `partial` : *bool*, default = *False*<br>
     If True, runs the t-test on the partial NRMSE: during simulation, the C-block entries are preserved and the M-block entries are simulated.
 
-`simulate` : bool, default = **False**<br>
+`simulate` : *bool*, default = **False**<br>
     If True, performs a parametric Monte Carlo simulation by generating synthetic right-hand side vectors `b`. If False (default), executes a nonparametric bootstrap procedure on residuals without re-estimation.
 
 **Returns:**
@@ -302,7 +302,7 @@ self.summary(display)
 Return or print a summary for the CLSP estimator.
 
 **Parameters:**
-`display` : bool, default = **False**<br>
+`display` : *bool*, default = **False**<br>
     If True, prints the summary instead of returning a dictionary.
 
 **Returns:**

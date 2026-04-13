@@ -182,15 +182,15 @@ def CLSPCorrelogram(
     dict of list
         A dictionary containing per-row diagnostic values:
         {
-            "constraint"   : [1, 2, ..., k],  # 1-based indices
+            "constraint"   : [1, 2, ..., k],  # 1-based indices,
             "rmsa_i"       : list of RMSA_i values,
             "rmsa_dkappaC" : list of Δκ(C) after deleting row i,
             "rmsa_dkappaB" : list of Δκ(B) after deleting row i,
             "rmsa_dkappaA" : list of Δκ(A) after deleting row i,
             "rmsa_dnrmse"  : list of ΔNRMSE after deleting row i,
-            "rmsa_dzhat"   : list of Δzhat after deleting row i,
-            "rmsa_dz"      : list of Δz after deleting row i,
-            "rmsa_dx"      : list of Δx after deleting row i,
+            "rmsa_dzhat"   : list of Δ‖zhat‖_2 after deleting row i,
+            "rmsa_dz"      : list of Δ‖z‖_2 after deleting row i,
+            "rmsa_dx"      : list of Δ‖x‖_F|2 after deleting row i
         }
     """
     # (RMSA) Total RMSA
@@ -232,14 +232,18 @@ def CLSPCorrelogram(
                                                C[i] / norms[i], C[j] / norms[j])
                                         ) ** 2 for j  in range(k) if j != i
                                        ]) / (k - 1)))(C_canon, i)
-                self.rmsa_dkappaC[i] =  tmp.kappaC - self.kappaC
-                self.rmsa_dkappaB[i] =  tmp.kappaB - self.kappaB
-                self.rmsa_dkappaA[i] =  tmp.kappaA - self.kappaA
-                self.rmsa_dnrmse[i]  =  tmp.nrmse  - self.nrmse
-                self.rmsa_dzhat[i]   =  tmp.zhat   - self.zhat
-                self.rmsa_dz[i]      =  tmp.z      - self.z
-                self.rmsa_dx[i]      = (tmp.x.reshape(-1, 1)    -
-                                        self.x.reshape(-1, 1))
+                self.rmsa_dkappaC[i] = (tmp.kappaC - self.kappaC)
+                self.rmsa_dkappaB[i] = (tmp.kappaB - self.kappaB)
+                self.rmsa_dkappaA[i] = (tmp.kappaA - self.kappaA)
+                self.rmsa_dnrmse[i]  = (tmp.nrmse  - self.nrmse)
+                self.rmsa_dzhat[i]   = (np.linalg.norm(tmp.zhat)  -
+                                        np.linalg.norm(self.zhat))
+                self.rmsa_dz[i]      = (np.linalg.norm(tmp.z)     -
+                                        np.linalg.norm(self.z))
+                self.rmsa_dx[i]      = (np.linalg.norm(tmp.x,  ord='fro' if
+                                        tmp.x.ndim > 1 else None) -
+                                        np.linalg.norm(self.x, ord='fro' if
+                                        self.x.ndim > 1 else None))
 
     # Return the correlogram
     indices = [i for i, r in enumerate(self.rmsa_i) if r >= threshold]
@@ -321,7 +325,7 @@ def CLSPTTest(
         'laplace': lambda n: self.rng.laplace(loc=0, scale=1, size=(n, 1))
     }.get(distribution.lower())
     if dist_fn is None:
-        raise self.error(f"Unsupported distribution: {distribution}")
+        raise self.error(f"Unsupported distribution: {distribution}.")
 
     # (t-test) Bootstrap-resampled or simulated NRMSE distribution under H0
     if len(self.nrmse_ttest) != sample_size or reset:
@@ -336,9 +340,9 @@ def CLSPTTest(
             self.nrmse_ttest = [None] * sample_size
             # (re)generate a nonparametric bootstrap sample
             if not simulate:
-                residuals = self.A @ self.zhat - self.b
+                residuals = self.A @ self.z - self.b
                 for i in range(sample_size):
-                    residuals = (lambda residuals:
+                    bootstrap = (lambda residuals:
                                  residuals[self.rng.choice(len(residuals),
                                            size=len(residuals), replace=True)])(
                                 (lambda residuals, partial:
@@ -349,16 +353,16 @@ def CLSPTTest(
                     self.nrmse_ttest[i] = (lambda residuals, sd:
                               np.linalg.norm(residuals) / np.sqrt(sd.shape[0]) /
                               np.std(sd) if not np.isclose(np.std(sd), 0) else
-                              np.inf)(residuals.ravel(), b)
+                              np.inf)(bootstrap.ravel(), b)
             # (re)generate a parametric Monte Carlo sample
             else:
                 tmp = copy.deepcopy(self)
                 for i in range(sample_size):
-                    tmp.b               = (dist_fn(self.b.shape[0])
-                                           if not partial else
-                                           np.vstack([self.b[:self.C_idx[0]],
-                                           dist_fn(self.b[self.C_idx[0]:].shape[0])
-                                           ]))             # simulate b_M only
+                    tmp.b     = (dist_fn(self.b.shape[0])
+                                 if not partial else
+                                 np.vstack([self.b[:self.C_idx[0]],
+                                 dist_fn(self.b[self.C_idx[0]:].shape[0])
+                                 ]))                   # simulate b_M only
                     tmp.solve()
                     self.nrmse_ttest[i] = (tmp.nrmse
                                            if not partial else
