@@ -73,6 +73,8 @@ for kw, val in model.ttest(sample_size=30,                   # NRMSE_partial sam
 
 For comprehensive information on the estimator's capabilities, advanced configuration options, and implementation details, please refer to the docstrings provided in each of the individual .py source files. These docstrings contain complete descriptions of available methods, their parameters, expected input formats, and output structures.
 
+To ensure cross-platform reproducibility, all CLSP implementations use a modified condition number function based on singular values, with a relative cutoff equal to `cond_tolerance * the largest singular value`.
+
 ### The `CLSP` Class
 
 ```python
@@ -109,7 +111,7 @@ vector containing the slack component of `z`.
 spectral κ() for *C_canon*.
 
 `self.kappaB`        : *float*<br>
-spectral κ() for *B* = *C_canon^+*`A`.
+spectral κ() for *B* = *`A`C_canon^+*.
 
 `self.kappaA`        : *float*<br>
 spectral κ() for `A`.
@@ -147,7 +149,7 @@ upper bound of the diagnostic interval (confidence band) based on κ(`A`).
 ### Solver Method: `solve()`
 
 ```python
-self.solve(problem, C, S, M, b, m, p, i, j, zero_diagonal, r, Z, rcond, tolerance, iteration_limit, final, alpha)
+self.solve(problem, C, S, M, b, m, p, i, j, zero_diagonal, r, Z, rcond, tolerance, iteration_limit, final, alpha, cond_tolerance)
 ```
 
 Solves the Convex Least Squares Programming (CLSP) problem.
@@ -205,6 +207,10 @@ This method performs a two-step estimation:<br>
     If a scalar float is provided, that value is used after clipping to [0, 1].<br>
     If a list/iterable of floats is provided, each candidate is evaluated via a full solve, and the α with the smallest NRMSE is selected.<br>
     If None, α is chosen, based on an error rule: α = min(1.0, NRMSE_{α = 0} / (NRMSE_{α = 0} + NRMSE_{α = 1} + tolerance))
+
+`cond_tolerance` : *float* or *None*, default = *None*<br>
+    Singular-value cutoff for the custom condition number function.<br>
+    If *None*, the implementation uses an internal relative cutoff of `1e-14`.
 
 `*args`, `**kwargs` : optional<br>
     CVXPY arguments passed to the CVXPY solver.

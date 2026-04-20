@@ -12,17 +12,18 @@ import cvxpy        as     cp
 from   scipy.sparse import csc_matrix
 
 def CLSPSolveInstance(
-    self, problem:         str   = "",   C: np.ndarray |  None  = None,
-          S: np.ndarray |  None  = None, M: np.ndarray |  None  = None,
-                                         b: np.ndarray |  None  = None,
-          m:     int    |  None  = None, p: int        |  None  = None,
-          i:     int             = 1,    j: int                 = 1,
+    self, problem:         str   = "",   C: np.ndarray | None = None,
+          S: np.ndarray |  None  = None, M: np.ndarray | None = None,
+                                         b: np.ndarray | None = None,
+          m:     int    |  None  = None, p: int        | None = None,
+          i:     int             = 1,    j: int               = 1,
           zero_diagonal:   bool  = False,
-          r:     int             = 1,    Z: np.ndarray |  None  = None,
-          rcond:           float                       |  None  = None,
-          tolerance:       float                       |  None  = None,
-          iteration_limit: int                         |  None  = None,
-          final: bool            = True, alpha: float  |  None  = None,
+          r:     int             = 1,    Z: np.ndarray | None = None,
+          rcond:           float                       | bool = False,
+          tolerance:       float                       | None = None,
+          iteration_limit: int                         | None = None,
+          final: bool            = True, alpha: float  | None = None,
+          cond_tolerance:  float                       | None = None,
           *args, **kwargs
 ) -> "CLSP":
     """
@@ -94,6 +95,10 @@ def CLSPSolveInstance(
         - α = 0: Lasso (L1 norm)
         - α = 1: Ridge (L2 norm)
         - 0 < α < 1: Elastic Net
+
+    cond_tolerance : float or None, default = None
+        Singular-value cutoff for the custom condition number function.
+        If None, the implementation uses an internal relative cutoff of 1e-14.
 
     *args, **kwargs : optional
         Additional arguments passed to the CVXPY solver backend.
@@ -193,7 +198,7 @@ def CLSPSolveInstance(
                           np.sqrt(self.b.shape[0]) / np.std(self.b))
             Q          = np.diagflat(-np.sign(self.b -
                                      self.A @ self.zhat)[self.C_idx[0]:])
-            self.canonize(problem, C, S, M, Q, self.b.reshape(-1, 1),
+            self.canonize("",      C, S, M, Q, self.b.reshape(-1, 1),
                                    m, p, i, j, zero_diagonal)
             Z_delta    = self.A.shape[1] - self.Z.shape[0]
             if Z_delta > 0:                            # augment Z by I
@@ -274,10 +279,11 @@ def CLSPSolveInstance(
     self.y = self.z[self.C_idx[1]:]
 
     # (kappaC), (kappaB), (kappaA) Condition numbers
-    self.kappaC            = np.linalg.cond(        self.A[:self.C_idx[0], :])
-    self.kappaB            = np.linalg.cond(self.A @
-                                            la.pinv(self.A[:self.C_idx[0], :]))
-    self.kappaA            = np.linalg.cond(        self.A)
+    self.kappaC            = _cond(                 self.A[:self.C_idx[0], :],
+                                                    "e",       cond_tolerance)
+    self.kappaB            = _cond(self.A @ la.pinv(self.A[:self.C_idx[0], :]),
+                                                    "e",       cond_tolerance)
+    self.kappaA            = _cond(self.A,          "e",       cond_tolerance)
 
     # (r2_partial), (nrmse_partial) M-block-based statistics
     if self.A.shape[0]     > self.C_idx[0]:
@@ -348,7 +354,7 @@ def CLSPSolve(
         to [0, 1]. If a list/iterable of floats is provided, each candidate
         is evaluated via a full solve, and the α with the smallest NRMSE is
         selected. If None, α is chosen, based on an error rule:
-        α = min(1.0, nrmse_{α=0} / (nrmse_{α=0} + nrmse_{α=1} + tolerance))
+        α = min(1.0, nrmse_{α=0} / (nrmse_{α=0} + nrmse_{α=1} + tolerance)).
 
     The selected value is stored in `self.alpha` and then passed to
     `CLSPSolveInstance(..., alpha=self.alpha)`.
@@ -400,3 +406,49 @@ def CLSPSolve(
     return CLSPSolveInstance(self, tolerance=self.tolerance,
                                    final=final, alpha=self.alpha,
                                    *args, **kw)
+
+def _cond(
+    x:         np.ndarray = np.empty((0, 0), dtype=np.float64),
+    norm:      str        = "e",
+    tolerance: float                                           | None = None
+) -> float:
+    """
+    Compute a custom condition number using the singular values of `x`.
+
+    Parameters
+    ----------
+    x : np.ndarray, default = np.empty((0, 0), dtype=np.float64)
+        Input matrix whose condition number is to be computed.
+    norm : str, default = "e"
+        Norm used to define the condition number. Only the first non-space
+        character is used after lowercasing. Supported values are "e" and "f".
+    tolerance : float or None, default = None
+        Singular-value cutoff. Only singular values `s` satisfying
+       `s > tolerance * np.max(s)` are retained.
+
+    Returns
+    -------
+    float
+        The requested condition number as a Python float. Returns `np.nan` if
+        `x` is not two-dimensional, if it is empty, or if no singular values
+        remain after applying the cutoff.
+
+    Notes
+    -----
+    This function is intentionally not identical to `numpy.linalg.cond()`.
+    """
+    x         = np.asarray(x, dtype=np.float64)
+    norm      = str(norm).strip().lower()[:1] or "e"
+    tolerance = 1e-14 if tolerance is None else float(tolerance)
+
+    if x.ndim != 2 or x.shape[0] == 0 or x.shape[1] == 0:
+        return np.nan
+    s    = np.linalg.svd(x, compute_uv=False)
+    smax = np.max(s)
+    s    = s[s > tolerance * smax]
+    if s.size == 0:
+        return np.nan
+    if norm == "e":
+        return float(smax                  / np.min(s)                    )
+    else:
+        return float(np.sqrt(np.sum(s**2)) * np.sqrt(np.sum((1.0 / s)**2)))
