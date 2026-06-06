@@ -198,7 +198,7 @@ def CLSPSolveInstance(
                           np.sqrt(self.b.shape[0]) / np.std(self.b))
             Q          = np.diagflat(-np.sign(self.b -
                                      self.A @ self.zhat)[self.C_idx[0]:])
-            self.canonize("",      C, S, M, Q, self.b.reshape(-1, 1),
+            self.canonize(problem, C, S, M, Q, self.b.reshape(-1, 1),
                                    m, p, i, j, zero_diagonal)
             Z_delta    = self.A.shape[1] - self.Z.shape[0]
             if Z_delta > 0:                            # augment Z by I
