@@ -1,5 +1,6 @@
 import warnings
 import copy
+import numbers
 import numpy       as np
 import scipy.stats as stats
 
@@ -20,8 +21,9 @@ def CLSPCanonicalForm(
     before solving a Convex Least Squares Programming (CLSP) problem.
 
     Depending on the specified problem type, it can generate allocation,
-    tabular matrix, or modular constraints and enforce optional diagonal
-    exclusions. All missing blocks are padded to ensure conformability.
+    tabular matrix, or modular constraints and add optional soft model rows
+    for a zero diagonal. All missing blocks are padded to ensure
+    conformability.
 
     Parameters
     ----------
@@ -54,7 +56,10 @@ def CLSPCanonicalForm(
         Grouping sizes for row and column sum constraints in AP problems.
 
     zero_diagonal : bool, default = False
-        If True, enforces structural zero diagonals via identity truncation.
+        If True, adds soft model rows x_kk = 0 for the diagonal of X in AP
+        problems (exact zeros via equal bounds, lo = hi = 0). The rows are
+        appended to M without merging: a known diagonal cell in M and its
+        row x_kk = 0 are both fitted in least squares.
 
     Attributes Set
     ---------------
@@ -64,8 +69,19 @@ def CLSPCanonicalForm(
     self.C_idx : tuple
         Tuple (rows, cols) indicating the size of the C block.
 
+    self.S_idx : tuple
+        Tuple (first, last + 1) indicating the columns of the S block.
+
     self.b : np.ndarray
         Conformable right-hand side vector.
+
+    self.A_base : np.ndarray
+        The matrix A as constructed, reused by later solves (A without Q
+        unless Q is supplied).
+
+    self.spec : dict
+        Inputs of the fit specification (problem, C, S, M, m, p, i, j,
+        zero_diagonal).
 
     Raises
     ------
@@ -73,6 +89,11 @@ def CLSPCanonicalForm(
         If the design matrix A or right-hand side b is malformed, inconsistent,
         or incompatible with the structural assumptions of the problem.
     """
+    # (spec) Inputs of the fit specification
+    spec   = copy.deepcopy({"problem": problem, "C": C, "S": S, "M": M,
+                            "m": m, "p": p, "i": i, "j": j,
+                            "zero_diagonal": zero_diagonal})
+
     # (b) Ensure the right-hand side is defined and set `self.b`
     if b is None:
         raise self.error("Right-hand side vector b must be provided.")
@@ -104,21 +125,20 @@ def CLSPCanonicalForm(
                 raise self.error(f"C must have {row_groups.shape[1]} columns")
         C =     (np.vstack([row_groups, col_groups, C]) if C is not None
             else np.vstack([row_groups, col_groups]))
-        # append an optional identity matrix to M, remove duplicates
+        # append an optional identity matrix to M, keep all rows (each one
+        # is a least-squares row: a known cell and x_kk = 0 are both kept)
         if zero_diagonal:
             M_flag = (M is None or
                       M.size == 0)
             M_diag = np.zeros((min(m, p), m * p))
             for k in range(min(m, p)):
                 M_diag[k, k * p + k] = 1
-            M, idx = np.unique(M_diag.copy() if M_flag
-                                             else np.vstack([M, M_diag]),
-                               axis=0,       return_index=True)
+            M      = M_diag.copy() if M_flag else np.vstack([M, M_diag])
             self.b = np.vstack([self.b[0:C.shape[0]],
                                 np.zeros((min(m, p), 1)) if M_flag
                                 else np.vstack([self.b[C.shape[0]:],
-                                np.zeros((min(m, p), 1))])[idx.reshape(-1)]])
-            del M_diag, idx
+                                np.zeros((min(m, p), 1))])])
+            del M_diag
 
     # (A) Option 2. CMLS and RP problems
     if 'cmls' in problem.lower() or 'rp' in problem.lower():
@@ -142,12 +162,17 @@ def CLSPCanonicalForm(
         raise self.error(f"C and M must have the same number of columns: "
                          f"{C.shape[1]} vs {M.shape[1]}")
 
-    # (A) Pad C and Q with zeros and set `self.A` and `self.C_idx`
+    # (A) Pad C and Q with zeros and set `self.A`, `self.C_idx`, `self.S_idx`
     self.A     = np.vstack([
         np.hstack([C, S, np.zeros((C.shape[0], Q.shape[1]))]),
         np.hstack([M,    np.zeros((M.shape[0], S.shape[1])),   Q])
     ])
     self.C_idx = C.shape
+    self.S_idx = (C.shape[1], C.shape[1] + S.shape[1])
+
+    # (A_base), (spec) Store the specification for later solves
+    self.A_base = self.A
+    self.spec   = spec
 
 def CLSPCorrelogram(
     self, reset:       bool = False,       threshold:    float = 0,
@@ -168,6 +193,9 @@ def CLSPCorrelogram(
 
     Additionally, it computes the total RMSA statistic across all rows,
     summarizing the overall angular alignment of the constraint block.
+
+    Failed refits are counted in `self.rmsa_failures` and reported by a
+    RuntimeWarning.
 
     Parameters
     ----------
@@ -220,14 +248,20 @@ def CLSPCorrelogram(
         self.rmsa_dzhat          = [None] * k
         self.rmsa_dz             = [None] * k
         self.rmsa_dx             = [None] * k
+        failures                 = []
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=RuntimeWarning)
             warnings.filterwarnings("ignore", message=".*tmp.*")
             for i in range(k):
-                tmp.A                = np.delete(self.A, i, axis=0)
-                tmp.b                = np.delete(self.b, i, axis=0)
+                tmp.A_base           = np.delete(self.A_base, i, axis=0)
+                tmp.b                = np.delete(self.b,      i, axis=0)
                 tmp.C_idx            = (k - 1, p)
-                tmp.solve()
+                tmp.solve(final=self.final,   alpha=self.alpha,
+                          r=self.r_max,       rcond=self.rcond,
+                          tolerance=self.tolerance,
+                          bounds=self.bounds, slack_sign=self.slack_sign,
+                          iteration_limit=self.iteration_limit)
+                failures            += [_refit_failure(tmp.status)]
                 self.rmsa_i[i]       = (lambda C,  i: np.sqrt(np.sum([(np.dot(
                                                C[i] / norms[i], C[j] / norms[j])
                                         ) ** 2 for j  in range(k) if j != i
@@ -244,6 +278,12 @@ def CLSPCorrelogram(
                                         tmp.x.ndim > 1 else None) -
                                         np.linalg.norm(self.x, ord='fro' if
                                         self.x.ndim > 1 else None))
+        failures                 = [f for f in failures if f is not None]
+        self.rmsa_failures       = len(failures)
+        if failures:
+            warnings.warn(f"corr(): {len(failures)} of {k} refits failed "
+                          f"({'; '.join(sorted(set(failures)))})",
+                          RuntimeWarning)
 
     # Return the correlogram
     indices = [i for i, r in enumerate(self.rmsa_i) if r >= threshold]
@@ -278,10 +318,11 @@ def CLSPTTest(
     Parameters
     ----------
     reset : bool, default = False
-        If True, forces recomputation of the NRMSE null distribution.
+        If True, forces recomputation of the NRMSE null distribution. It is
+        also recomputed after a new solve or if any other argument changes.
 
     sample_size : int, default = 50
-        Size of the Monte Carlo simulated sample under H₀.
+        Size of the Monte Carlo simulated sample under H₀ (≥ 2).
 
     seed : int or None, default = None
         Optional random seed to override the default.
@@ -292,7 +333,8 @@ def CLSPTTest(
 
     partial : bool, default = False
         If True, runs the t-test on the partial NRMSE: during simulation,
-        the C-block entries are preserved and the M-block entries are simulated.
+        the C-block entries are preserved and the M-block entries are
+        simulated; the bootstrap resamples e_M = b_M - M·x.
 
     simulate : bool, default = False
         If True, performs a parametric Monte Carlo simulation by generating
@@ -310,10 +352,17 @@ def CLSPTTest(
             'p_two_sided' : 2-sided t-test p-value,
             'nrmse'       : observed value,
             'mean_null'   : mean of null distribution,
-            'std_null'    : std of null distribution
+            'std_null'    : std of null distribution,
+            'failures'    : number of failed refits (simulate=True)
         }
+        The p-values are nan, with a RuntimeWarning, if an NRMSE is not
+        finite (sd(b) = 0) or the null sample has zero variance. Failed
+        refits are reported by a RuntimeWarning.
     """
     # Set the seed, RNG configuration, and distribution
+    if not isinstance(sample_size, numbers.Integral) or sample_size < 2:
+        raise self.error(f"sample_size must be an integer ≥ 2, got "
+                         f"{sample_size!r}")
     if seed is not None:
         self.seed = seed
         self.rng  = np.random.default_rng(self.seed)
@@ -326,33 +375,36 @@ def CLSPTTest(
     }.get(distribution.lower())
     if dist_fn is None:
         raise self.error(f"Unsupported distribution: {distribution}.")
+    if partial and self.A.shape[0] == self.C_idx[0]:
+        warnings.warn(
+        "No M-block present in A; falling back to full NRMSE t-test.",
+        RuntimeWarning)
+        partial = False
+    key = (sample_size, self.seed, distribution.lower(), bool(partial),
+           bool(simulate))                             # cache key
 
     # (t-test) Bootstrap-resampled or simulated NRMSE distribution under H0
-    if len(self.nrmse_ttest) != sample_size or reset:
+    if self.nrmse_ttest_key != key or reset:
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=RuntimeWarning)
             warnings.filterwarnings("ignore", message=".*tmp.*")
-            if partial and self.A.shape[0] == self.C_idx[0]:
-                warnings.warn(
-                "No M-block present in A; falling back to full NRMSE t-test.",
-                RuntimeWarning)
-                partial = False
             self.nrmse_ttest = [None] * sample_size
+            failures         = []
             # (re)generate a nonparametric bootstrap sample
             if not simulate:
-                residuals = self.A @ self.z - self.b
+                residuals = (self.A @ self.z - self.b
+                             if not partial else       # e_M = b_M - M·x
+                             self.b[self.C_idx[0]:] -
+                             self.A[self.C_idx[0]:, :self.C_idx[1]] @
+                             self.z[:self.C_idx[1]])
                 for i in range(sample_size):
-                    bootstrap = (lambda residuals:
-                                 residuals[self.rng.choice(len(residuals),
-                                           size=len(residuals), replace=True)])(
-                                (lambda residuals, partial:
-                                 residuals if not partial else
-                                 residuals[self.C_idx[0]:])(residuals, partial))
+                    bootstrap = residuals[self.rng.choice(len(residuals),
+                                          size=len(residuals), replace=True)]
                     b         = (self.b    if not partial else
                                  self.b[self.C_idx[0]:])
                     self.nrmse_ttest[i] = (lambda residuals, sd:
                               np.linalg.norm(residuals) / np.sqrt(sd.shape[0]) /
-                              np.std(sd) if not np.isclose(np.std(sd), 0) else
+                              np.std(sd) if np.std(sd) > 0                else
                               np.inf)(bootstrap.ravel(), b)
             # (re)generate a parametric Monte Carlo sample
             else:
@@ -363,32 +415,218 @@ def CLSPTTest(
                                  np.vstack([self.b[:self.C_idx[0]],
                                  dist_fn(self.b[self.C_idx[0]:].shape[0])
                                  ]))                   # simulate b_M only
-                    tmp.solve()
+                    tmp.solve(final=self.final,   alpha=self.alpha,
+                              r=self.r_max,       rcond=self.rcond,
+                              tolerance=self.tolerance,
+                              bounds=self.bounds, slack_sign=self.slack_sign,
+                              iteration_limit=self.iteration_limit)
                     self.nrmse_ttest[i] = (tmp.nrmse
                                            if not partial else
                                            tmp.nrmse_partial)
+                    failures           += [_refit_failure(tmp.status)]
+        failures                  = [f for f in failures if f is not None]
+        self.nrmse_ttest_key      = key
+        self.nrmse_ttest_failures = len(failures)
+        if failures:
+            warnings.warn(f"ttest(): {len(failures)} of {sample_size} refits "
+                          f"failed ({'; '.join(sorted(set(failures)))})",
+                          RuntimeWarning)
 
-    # Return the t-test
-    nrmse_null = np.array(self.nrmse_ttest)
-    mean_null  = np.mean(nrmse_null)
-    std_null   = np.std(nrmse_null, ddof=1)
-    t_stat     = (((self.nrmse
-                   if partial == False else
-                   self.nrmse_partial) - mean_null) /
-                  (std_null / np.sqrt(sample_size)))
-    p_left     = stats.t.cdf(t_stat, df=sample_size - 1)
-    p_right    = 1 - p_left
-    p_two      = stats.t.sf(abs(t_stat), df=sample_size - 1) * 2
+    # Return the t-test (nan p-values if undefined)
+    nrmse      = self.nrmse if partial == False else self.nrmse_partial
+    nrmse_null = np.array(self.nrmse_ttest, dtype=np.float64)
+    finite     = bool(np.all(np.isfinite(nrmse_null)))
+    mean_null  = np.mean(nrmse_null)         if finite else np.nan
+    std_null   = np.std(nrmse_null, ddof=1)  if finite else np.nan
+    if not (finite and np.isfinite(nrmse)):
+        warnings.warn("The NRMSE is not finite (sd(b) = 0); p-values are "
+                      "undefined (nan).", RuntimeWarning)
+        p_left  = p_right = p_two = np.nan
+    elif std_null > 0:
+        t_stat  = ((nrmse - mean_null) /
+                   (std_null / np.sqrt(sample_size)))
+        p_left  = stats.t.cdf(t_stat, df=sample_size - 1)
+        p_right = 1 - p_left
+        p_two   = stats.t.sf(abs(t_stat), df=sample_size - 1) * 2
+    else:
+        warnings.warn("The null NRMSE sample has zero variance; p-values "
+                      "are undefined (nan).", RuntimeWarning)
+        p_left  = p_right = p_two = np.nan
     return {
         "p_one_left" : p_left,
         "p_one_right": p_right,
         "p_two_sided": p_two,
-        "nrmse"      : (self.nrmse
-                        if partial == False else
-                        self.nrmse_partial),
+        "nrmse"      : nrmse,
         "mean_null"  : mean_null,
-        "std_null"   : std_null
+        "std_null"   : std_null,
+        "failures"   : self.nrmse_ttest_failures
     }
+
+def CLSPCVAlpha(
+    self, alphas:      tuple | list = (0, 0.25, 0.5, 0.75, 1),
+          folds:       int          = 5,
+          seed:        int  | None  = None,
+          refit:       bool         = False,
+) -> dict[str, object]:
+    """
+    Select alpha for Step 2 by K-fold cross-validation over the M rows.
+
+    The M rows are split at random into `folds` folds; the C rows are never
+    held out. For each fold and each α in `alphas`, the model is refitted
+    without the held-out rows, b_M of the held-out rows is predicted by M·x,
+    and the root mean squared prediction error (RMSE) is recorded. A failed
+    fold fit is retried once with CLARABEL; an α with a failed fold is
+    invalid (nan scores, a RuntimeWarning).
+
+    The result is not informative (best = 1.0, a RuntimeWarning, no refit)
+    if there are no M rows, fewer M rows than folds, `final` is False, no
+    bounds or slack signs are active and Z is diagonal, all α give the same
+    mean RMSE, or fewer than two α are valid (best = nan if α = 1 is
+    invalid). Ties are resolved in favour of α = 1.
+
+    Parameters
+    ----------
+    alphas : tuple or list, default = (0, 0.25, 0.5, 0.75, 1)
+        Candidate values of α in [0, 1].
+
+    folds : int, default = 5
+        Number of folds (≥ 2).
+
+    seed : int or None, default = None
+        Optional random seed to override the default.
+
+    refit : bool, default = False
+        If True and the result is informative, the model is refitted with
+        the best α. Otherwise, the model is left unchanged.
+
+    Returns
+    -------
+    dict
+        Dictionary with the cross-validation results (also stored in
+        `self.cv_alpha_result`):
+        {
+            'alpha'        : candidate values of α,
+            'cv_rmse_mean' : mean RMSE over the folds for each α,
+            'cv_rmse_sd'   : standard deviation of the RMSE for each α,
+            'best'         : α with the smallest mean RMSE (1.0 if the
+                             result is not informative),
+            'informative'  : whether α changes the predictions,
+            'reason'       : reason of the result,
+            'valid'        : whether all folds of each α are valid,
+            'failures'     : failed fold fits, {'alpha', 'fold', 'reason'},
+            'fits'         : fold fits, {'alpha', 'fold', 'solver',
+                             'retry', 'valid'} (retry: reason of a
+                             CLARABEL retry or None)
+        }
+    """
+    # Set the seed, RNG configuration, and candidates
+    if self.A_base is None or self.z is None:
+        raise self.error("cv_alpha() requires a fitted model.")
+    if (not isinstance(alphas, (list, tuple, np.ndarray))   or
+        np.size(alphas) == 0                                or
+        not all(isinstance(a, numbers.Real) and 0.0 <= a <= 1.0
+                for a in np.ravel(alphas))):
+        raise self.error(f"alphas must be a sequence of values in [0, 1], "
+                         f"got {alphas!r}")
+    if not isinstance(folds, numbers.Integral) or folds < 2:
+        raise self.error(f"folds must be an integer ≥ 2, got {folds!r}")
+    if seed is not None:
+        self.seed = seed
+        self.rng  = np.random.default_rng(self.seed)
+    alphas  = [float(a) for a in np.ravel(alphas)]
+    k, n    = self.C_idx
+    l       = self.A_base.shape[0] - k                 # number of M rows
+    bounded = (np.any(np.isfinite(self.x_lb)) or np.any(np.isfinite(self.x_ub))
+               or (self.slack_sign and self.S_idx[1] > self.S_idx[0]))
+    reason  = ("no M rows"                                if l == 0      else
+               f"fewer M rows ({l}) than folds ({folds})" if l < folds   else
+               "final is False, α is not used"            if not self.final
+                                                                         else
+               "no bounds or slack signs and a diagonal Z, Step 2 returns "
+               "zhat for every α"                         if not bounded and
+               np.allclose(self.Z, np.diag(np.diag(self.Z)),
+                           atol=self.tolerance)                          else
+               None)
+
+    # (cv_alpha_result) RMSE of the held-out M rows for each fold and α
+    rmse    = np.full((len(alphas), folds), np.nan)
+    valid   = np.ones(len(alphas), dtype=bool)
+    fails   = []
+    fits    = []                                       # solver log
+    if reason is None:
+        tmp = copy.deepcopy(self)
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=RuntimeWarning)
+            for f, h in enumerate(np.array_split(self.rng.permutation(l),
+                                                 folds)):
+                tmp.A_base = np.delete(self.A_base, k + h, axis=0)
+                tmp.b      = np.delete(self.b,      k + h, axis=0)
+                for a, alpha in enumerate(alphas):
+                    retry      = None                  # CLARABEL retry
+                    for kw in ({}, {"solver": "CLARABEL"}):
+                        tmp.solve(final=self.final,   alpha=alpha,
+                                  r=self.r_max,       rcond=self.rcond,
+                                  tolerance=self.tolerance,
+                                  bounds=self.bounds,
+                                  slack_sign=self.slack_sign,
+                                  iteration_limit=self.iteration_limit, **kw)
+                        error  = _refit_failure(tmp.status)
+                        if error is None:
+                            break
+                        retry  = retry or f"{tmp.status['solver']}: {error}"
+                    fits      += [{"alpha": alpha, "fold": f,
+                                   "solver": tmp.status["solver"],
+                                   "retry": retry or tmp.status["retry"],
+                                   "valid": error is None}]
+                    if error is not None:              # invalid α
+                        valid[a] = False
+                        fails   += [{"alpha": alpha, "fold": f,
+                                     "reason": error}]
+                        continue
+                    e          = (self.b[k + h, 0] -   # e = b_M - M·x
+                                  self.A_base[k + h, :n] @ tmp.z[:n, 0])
+                    rmse[a, f] = np.sqrt(np.mean(e ** 2))
+    rmse[~valid] = np.nan                              # no partial scores
+    mean    = np.mean(rmse, axis=1)
+    i_one   = int(np.argmax(np.where(valid, alphas, -np.inf)))
+    if fails:
+        warnings.warn(f"cv_alpha(): α = "
+                      f"{[a for a, v in zip(alphas, valid) if not v]} "
+                      f"invalid, {len(fails)} failed fold fits ("
+                      f"{'; '.join(sorted({v['reason'] for v in fails}))})",
+                      RuntimeWarning)
+    if reason is None and np.sum(valid) < 2:
+        reason = "no valid α" if not np.any(valid) else "one valid α"
+    if reason is None and (np.nanmax(np.abs(mean - mean[i_one])) <=
+                           self.tolerance * abs(mean[i_one])):
+        reason = "all α give the same predictions"
+    best    = (np.nan                if reason is not None and
+                                        (not np.any(valid) or 1.0 in
+                                         [v["alpha"] for v in fails])  else
+               1.0                   if reason is not None             else
+               alphas[i_one]         if mean[i_one] <= np.nanmin(mean) +
+                                        self.tolerance *
+                                        abs(np.nanmin(mean))           else
+               alphas[int(np.nanargmin(mean))])
+    if reason is not None:
+        warnings.warn(f"cv_alpha() is not informative ({reason}); "
+                      f"best = {best}", RuntimeWarning)
+
+    # Refit with the best α and return the result
+    if refit and reason is None:
+        self.solve(final=self.final, alpha=best, r=self.r_max)
+    self.cv_alpha_result = {
+        "alpha"       : alphas,
+        "cv_rmse_mean": mean.tolist(),
+        "cv_rmse_sd"  : np.std(rmse, axis=1, ddof=1).tolist(),
+        "best"        : float(best),
+        "informative" : reason is None,
+        "reason"      : reason or "smallest mean RMSE",
+        "valid"       : valid.tolist(),
+        "failures"    : fails,
+        "fits"        : fits
+    }
+    return self.cv_alpha_result
 
 def CLSPSummary(
     self, display:     bool = False
@@ -409,10 +647,17 @@ def CLSPSummary(
         return dict( min=np.nanmin(v), max=np.nanmax(v),
                     mean=np.nanmean(v), sd=np.nanstd(v, ddof=1))
     summary                     = {k: v for k, v in self.__dict__.items()
-                                   if k not in {"A", "C_idx", "b",
-                                                "Z", "zhat" ,
+                                   if k not in {"A", "C_idx", "S_idx", "b",
+                                                "A_base", "spec",
+                                                "sv_discarded",
+                                                "cv_alpha_result",
+                                                "Z", "zhat" , "zhat0",
                                                 "z", "x", "y",
-                                                "nrmse_ttest"} and
+                                                "bounds", "x_lb", "x_ub",
+                                                "fixed", "fixed_at",
+                                                "nrmse_ttest",
+                                                "nrmse_ttest_key",
+                                                "nrmse_ttest_failures"} and
                                         not callable(v)}
     if self.zhat is not None:
         summary  = {'inverse'   : ("Bott-Duffin" if self.Z is not None and
@@ -421,6 +666,16 @@ def CLSPSummary(
                                                     rtol=self.tolerance,
                                                     atol=self.tolerance) else
                                    "Moore-Penrose"),          **summary}
+        summary["x_bounds"]     = ("none" if self.bounds is None         else
+                                   f"[{self.x_lb[0]:g}, {self.x_ub[0]:g}]"
+                                   if (np.all(self.x_lb == self.x_lb[0]) and
+                                       np.all(self.x_ub == self.x_ub[0])) else
+                                   f"lb∈[{np.min(self.x_lb):g}, "
+                                   f"{np.max(self.x_lb):g}], "
+                                   f"ub∈[{np.min(self.x_ub):g}, "
+                                   f"{np.max(self.x_ub):g}]")
+        summary["n_fixed"]      = (int(self.fixed.sum())
+                                   if self.fixed is not None else 0)
     if self.rmsa is not None:
         summary["rmsa_i"]       = _summary(summary.get("rmsa_i"))
         summary["rmsa_dkappaC"] = _summary(summary.get("rmsa_dkappaC"))
@@ -473,13 +728,19 @@ def CLSPSummary(
                                             len(f"{v:.{dp}f}") <= width) else
                           f"{v:.{ep}e}")
     print("Estimator Configuration:")
-    _print(summary, "inverse",   n="Generalized inverse")
-    _print(summary, "r",         n="Iterations (r)")
-    _print(summary, "tolerance", n="Tolerance")
-    _print(summary, "final",     n="Final correction")
-    _print(summary, "alpha",     n="Regularization (α)")
+    _print(summary, "inverse",    n="Generalized inverse")
+    _print(summary, "r",          n="Iterations (r)")
+    _print(summary, "tolerance",  n="Tolerance")
+    _print(summary, "final",      n="Final correction")
+    _print(summary, "alpha",      n="Regularization (α)")
+    if (self.status or {}).get("retry") is not None:
+        _print(self.status, "retry",  n="Step 2 retry")
+    _print(summary, "x_bounds",   n="Bounds (x)")
+    _print(summary, "slack_sign", n="Slack sign (S ≥ 0)")
+    _print(summary, "scale",      n="Column scaling")
+    _print(summary, "n_fixed",    n="Fixed variables")
     print("\nNumerical Stability:")
-    _print(summary, ["kappaC", "kappaB", "kappaA"])
+    _print(summary, ["kappaC", "kappaB", "kappaA", "rank"])
     if summary.get("rmsa")    is not None:
         _print(summary, "rmsa")
         _print(summary, ["i", "dkappaC", "dkappaB", "dkappaA",
@@ -488,3 +749,28 @@ def CLSPSummary(
     _print(summary, ["r2_partial", "nrmse", "nrmse_partial"])
     _print(summary, ["z_lower", "z_upper", "x_lower", "x_upper",
                      "y_lower", "y_upper"])
+
+def _refit_failure(
+    status:    dict
+) -> str | None:
+    """
+    Return the reason of a failed diagnostic refit (None if it succeeded).
+
+    A refit fails if Step 1 did not converge ("converged" or "bvls
+    fallback") or Step 2 fell back to zhat.
+
+    Parameters
+    ----------
+    status : dict
+        `self.status` of the refit.
+
+    Returns
+    -------
+    str or None
+        "step1: <status>", "final: <status>" or None.
+    """
+    return (f"step1: {status['step1']}"
+            if status["step1"] not in {"converged", "bvls fallback"} else
+            f"final: {status['final']}"
+            if str(status["final"]).startswith("fallback")          else
+            None)
