@@ -1,9 +1,9 @@
 [project]
 name = "pyclsp"
-version = "4.0.1"
+version = "5.0.0"
 description = "Modular Two-Step Convex Optimization Estimator for Ill-Posed Problems"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [
@@ -18,9 +18,9 @@ keywords = [
 ]
 classifiers = [
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
   "Operating System :: OS Independent",
   "Topic :: Scientific/Engineering :: Mathematics",
   "Topic :: Scientific/Engineering :: Information Analysis"
@@ -31,7 +31,8 @@ dependencies = [
   "cvxpy>=1.8.1",
   "ecos>=2.0",
   "osqp>=0.6",
-  "scs>=3.2"
+  "scs>=3.2",
+  "clarabel>=0.6"
 ]
 
 [project.urls]
